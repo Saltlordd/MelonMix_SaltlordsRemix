@@ -29,7 +29,7 @@ jobs:
       - name: Install the matching SDK, NDK and CMake
         run: |
           yes | sdkmanager --licenses >/dev/null || true
-          sdkmanager \
+            sdkmanager --channel=3 \
             "platforms;android-37" \
             "build-tools;37.0.0" \
             "ndk;28.0.13004108" \
