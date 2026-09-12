@@ -1,0 +1,48 @@
+diff --git a/app/src/main/java/me/magnum/melonds/domain/model/layout/LayoutComponent.kt b/app/src/main/java/me/magnum/melonds/domain/model/layout/LayoutComponent.kt
+--- a/app/src/main/java/me/magnum/melonds/domain/model/layout/LayoutComponent.kt
++++ b/app/src/main/java/me/magnum/melonds/domain/model/layout/LayoutComponent.kt
+@@ -11,3 +11,4 @@ enum class LayoutComponent(val matchingInputs: List<Input>) {
+     BUTTON_L(listOf(Input.L)),
+     BUTTON_R(listOf(Input.R)),
++    BUTTON_KH_LOCK_ON(listOf(Input.KH_LOCK_ON)),
+     BUTTON_HINGE(listOf(Input.HINGE)),
+diff --git a/app/src/main/java/me/magnum/melonds/ui/emulator/RuntimeLayoutView.kt b/app/src/main/java/me/magnum/melonds/ui/emulator/RuntimeLayoutView.kt
+--- a/app/src/main/java/me/magnum/melonds/ui/emulator/RuntimeLayoutView.kt
++++ b/app/src/main/java/me/magnum/melonds/ui/emulator/RuntimeLayoutView.kt
+@@ -95,2 +95,3 @@ class RuntimeLayoutView(context: Context, attrs: AttributeSet? = null) : LayoutV
+             getLayoutComponentView(LayoutComponent.BUTTON_R)?.view?.setOnTouchListener(SingleButtonInputHandler(it, Input.R, enableHapticFeedback, touchVibrator))
++            getLayoutComponentView(LayoutComponent.BUTTON_KH_LOCK_ON)?.view?.setOnTouchListener(SingleButtonInputHandler(it, Input.KH_LOCK_ON, enableHapticFeedback, touchVibrator))
+             getLayoutComponentView(LayoutComponent.BUTTON_SELECT)?.view?.setOnTouchListener(SingleButtonInputHandler(it, Input.SELECT, enableHapticFeedback, touchVibrator))
+diff --git a/app/src/main/java/me/magnum/melonds/ui/common/componentbuilders/SingleButtonLayoutComponentViewBuilder.kt b/app/src/main/java/me/magnum/melonds/ui/common/componentbuilders/SingleButtonLayoutComponentViewBuilder.kt
+--- a/app/src/main/java/me/magnum/melonds/ui/common/componentbuilders/SingleButtonLayoutComponentViewBuilder.kt
++++ b/app/src/main/java/me/magnum/melonds/ui/common/componentbuilders/SingleButtonLayoutComponentViewBuilder.kt
+@@ -22,2 +22,3 @@ class SingleButtonLayoutComponentViewBuilder(private val layoutComponent: Layout
+             LayoutComponent.BUTTON_R -> R.drawable.button_r
++            LayoutComponent.BUTTON_KH_LOCK_ON -> R.drawable.button_kh_lock_on
+             LayoutComponent.BUTTON_START -> R.drawable.button_start
+diff --git a/app/src/main/java/me/magnum/melonds/utils/InputUtils.kt b/app/src/main/java/me/magnum/melonds/utils/InputUtils.kt
+--- a/app/src/main/java/me/magnum/melonds/utils/InputUtils.kt
++++ b/app/src/main/java/me/magnum/melonds/utils/InputUtils.kt
+@@ -12,2 +12,3 @@ fun getLayoutComponentName(layoutComponent: LayoutComponent): Int {
+         LayoutComponent.BUTTON_R -> R.string.input_r
++        LayoutComponent.BUTTON_KH_LOCK_ON -> R.string.input_kh_lock_on
+         LayoutComponent.BUTTON_START -> R.string.input_start
+diff --git a/app/src/main/res/drawable/button_kh_lock_on.xml b/app/src/main/res/drawable/button_kh_lock_on.xml
+new file mode 100644
+--- /dev/null
++++ b/app/src/main/res/drawable/button_kh_lock_on.xml
+@@ -0,0 +1,14 @@
++<?xml version="1.0" encoding="utf-8"?>
++<vector xmlns:android="http://schemas.android.com/apk/res/android"
++    android:width="128dp"
++    android:height="128dp"
++    android:viewportWidth="128"
++    android:viewportHeight="128">
++    <path
++        android:fillColor="#99000000"
++        android:pathData="M64,4A60,60 0,1 0,64 124A60,60 0,1 0,64 4" />
++    <path
++        android:fillColor="#FFFFFFFF"
++        android:fillType="evenOdd"
++        android:pathData="M44,57L44,47C44,35.95 52.95,27 64,27C75.05,27 84,35.95 84,47L84,57L91,57C94.31,57 97,59.69 97,63L97,94C97,97.31 94.31,100 91,100L37,100C33.69,100 31,97.31 31,94L31,63C31,59.69 33.69,57 37,57ZM52,57L76,57L76,47C76,40.37 70.63,35 64,35C57.37,35 52,40.37 52,47ZM64,69C60.13,69 57,72.13 57,76C57,78.58 58.4,80.83 60.5,82.04L60.5,90L67.5,90L67.5,82.04C69.6,80.83 71,78.58 71,76C71,72.13 67.87,69 64,69Z" />
++</vector>
