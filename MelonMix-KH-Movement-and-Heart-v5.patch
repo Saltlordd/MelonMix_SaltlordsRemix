@@ -1,0 +1,249 @@
+diff --git a/app/src/main/java/me/magnum/melonds/domain/model/layout/LayoutComponent.kt b/app/src/main/java/me/magnum/melonds/domain/model/layout/LayoutComponent.kt
+index f130311..aba1907 100644
+--- a/app/src/main/java/me/magnum/melonds/domain/model/layout/LayoutComponent.kt
++++ b/app/src/main/java/me/magnum/melonds/domain/model/layout/LayoutComponent.kt
+@@ -6,6 +6,8 @@ enum class LayoutComponent(val matchingInputs: List<Input>) {
+     TOP_SCREEN(emptyList()),
+     BOTTOM_SCREEN(emptyList()),
+     DPAD(listOf(Input.UP, Input.DOWN, Input.LEFT, Input.RIGHT)),
++    MOVEMENT_STICK(listOf(Input.UP, Input.DOWN, Input.LEFT, Input.RIGHT)),
++    KH_COMMAND_PAD(listOf(Input.KH_COMMAND_MENU_UP, Input.KH_COMMAND_MENU_DOWN, Input.KH_COMMAND_MENU_LEFT, Input.KH_COMMAND_MENU_RIGHT)),
+     BUTTONS(listOf(Input.A, Input.B, Input.X, Input.Y)),
+     BUTTON_START(listOf(Input.START)),
+     BUTTON_SELECT(listOf(Input.SELECT)),
+diff --git a/app/src/main/java/me/magnum/melonds/ui/common/componentbuilders/KhMovementStickLayoutComponentViewBuilder.kt b/app/src/main/java/me/magnum/melonds/ui/common/componentbuilders/KhMovementStickLayoutComponentViewBuilder.kt
+new file mode 100644
+index 0000000..029e369
+--- /dev/null
++++ b/app/src/main/java/me/magnum/melonds/ui/common/componentbuilders/KhMovementStickLayoutComponentViewBuilder.kt
+@@ -0,0 +1,12 @@
++package me.magnum.melonds.ui.common.componentbuilders
++
++import android.content.Context
++import android.view.View
++import me.magnum.melonds.ui.common.LayoutComponentViewBuilder
++import me.magnum.melonds.ui.common.input.KhCameraStickView
++
++class KhMovementStickLayoutComponentViewBuilder : LayoutComponentViewBuilder() {
++    override fun build(context: Context): View = KhCameraStickView(context)
++
++    override fun getAspectRatio() = 1f
++}
+diff --git a/app/src/main/java/me/magnum/melonds/ui/common/input/KhShortcutToggleView.kt b/app/src/main/java/me/magnum/melonds/ui/common/input/KhShortcutToggleView.kt
+index 0948728..71bfdfe 100644
+--- a/app/src/main/java/me/magnum/melonds/ui/common/input/KhShortcutToggleView.kt
++++ b/app/src/main/java/me/magnum/melonds/ui/common/input/KhShortcutToggleView.kt
+@@ -4,6 +4,7 @@ import android.content.Context
+ import android.graphics.Canvas
+ import android.graphics.Color
+ import android.graphics.Paint
++import android.graphics.Path
+ import android.graphics.Typeface
+ import android.view.View
+ import kotlin.math.min
+@@ -20,6 +21,11 @@ class KhShortcutToggleView(context: Context) : View(context) {
+         textAlign = Paint.Align.CENTER
+         typeface = Typeface.DEFAULT_BOLD
+     }
++    private val heartPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
++        color = Color.WHITE
++        style = Paint.Style.FILL
++    }
++    private val heartPath = Path()
+ 
+     var isLatched = false
+         private set
+@@ -40,9 +46,13 @@ class KhShortcutToggleView(context: Context) : View(context) {
+         canvas.drawCircle(centerX, centerY, radius, backgroundPaint)
+         canvas.drawCircle(centerX, centerY, radius, ringPaint)
+ 
+-        labelPaint.textSize = size * 0.38f
+-        canvas.drawText("L", centerX, centerY + size * 0.08f, labelPaint)
++        heartPath.reset()
++        heartPath.moveTo(centerX, centerY + size * 0.20f)
++        heartPath.cubicTo(centerX - size * 0.40f, centerY - size * 0.02f, centerX - size * 0.27f, centerY - size * 0.32f, centerX, centerY - size * 0.12f)
++        heartPath.cubicTo(centerX + size * 0.27f, centerY - size * 0.32f, centerX + size * 0.40f, centerY - size * 0.02f, centerX, centerY + size * 0.20f)
++        heartPath.close()
++        canvas.drawPath(heartPath, heartPaint)
+         labelPaint.textSize = size * 0.105f
+-        canvas.drawText(if (isLatched) "SHORTCUT ON" else "SHORTCUT", centerX, centerY + size * 0.30f, labelPaint)
++        canvas.drawText(if (isLatched) "SHORTCUT ON" else "SHORTCUT", centerX, centerY + size * 0.34f, labelPaint)
+     }
+ }
+diff --git a/app/src/main/java/me/magnum/melonds/ui/emulator/RuntimeLayoutComponentViewBuilderFactory.kt b/app/src/main/java/me/magnum/melonds/ui/emulator/RuntimeLayoutComponentViewBuilderFactory.kt
+index 64a26df..de6d4f6 100644
+--- a/app/src/main/java/me/magnum/melonds/ui/emulator/RuntimeLayoutComponentViewBuilderFactory.kt
++++ b/app/src/main/java/me/magnum/melonds/ui/emulator/RuntimeLayoutComponentViewBuilderFactory.kt
+@@ -16,6 +16,8 @@ class RuntimeLayoutComponentViewBuilderFactory : LayoutComponentViewBuilderFacto
+                 LayoutComponent.TOP_SCREEN -> RuntimeScreenLayoutComponentViewBuilder()
+                 LayoutComponent.BOTTOM_SCREEN -> RuntimeScreenLayoutComponentViewBuilder()
+                 LayoutComponent.DPAD -> DpadLayoutComponentViewBuilder()
++                LayoutComponent.MOVEMENT_STICK -> KhMovementStickLayoutComponentViewBuilder()
++                LayoutComponent.KH_COMMAND_PAD -> DpadLayoutComponentViewBuilder()
+                 LayoutComponent.BUTTONS -> ButtonsLayoutComponentViewBuilder()
+                 LayoutComponent.BUTTON_L_SHORTCUT_TOGGLE -> KhShortcutToggleLayoutComponentViewBuilder()
+                 LayoutComponent.KH_CAMERA_STICK -> KhCameraStickLayoutComponentViewBuilder()
+diff --git a/app/src/main/java/me/magnum/melonds/ui/emulator/RuntimeLayoutView.kt b/app/src/main/java/me/magnum/melonds/ui/emulator/RuntimeLayoutView.kt
+index 4e1adc9..8d8f824 100644
+--- a/app/src/main/java/me/magnum/melonds/ui/emulator/RuntimeLayoutView.kt
++++ b/app/src/main/java/me/magnum/melonds/ui/emulator/RuntimeLayoutView.kt
+@@ -16,6 +16,8 @@ import me.magnum.melonds.ui.emulator.input.FrontendInputHandler
+ import me.magnum.melonds.ui.emulator.input.IInputListener
+ import me.magnum.melonds.ui.emulator.input.KhCameraStickInputHandler
+ import me.magnum.melonds.ui.emulator.input.KhShortcutToggleInputHandler
++import me.magnum.melonds.ui.emulator.input.KhMovementStickInputHandler
++import me.magnum.melonds.ui.emulator.input.KhCommandPadInputHandler
+ import me.magnum.melonds.ui.emulator.input.SingleButtonInputHandler
+ import me.magnum.melonds.ui.emulator.input.TouchscreenInputHandler
+ import me.magnum.melonds.ui.emulator.input.view.ToggleableImageView
+@@ -93,6 +95,8 @@ class RuntimeLayoutView(context: Context, attrs: AttributeSet? = null) : LayoutV
+         val enableHapticFeedback = currentRuntimeLayout.isHapticFeedbackEnabled
+         systemInputHandler?.let {
+             getLayoutComponentView(LayoutComponent.DPAD)?.view?.setOnTouchListener(DpadInputHandler(it, enableHapticFeedback, touchVibrator))
++            getLayoutComponentView(LayoutComponent.MOVEMENT_STICK)?.view?.setOnTouchListener(KhMovementStickInputHandler(it, enableHapticFeedback, touchVibrator))
++            getLayoutComponentView(LayoutComponent.KH_COMMAND_PAD)?.view?.setOnTouchListener(KhCommandPadInputHandler(it, enableHapticFeedback, touchVibrator))
+             getLayoutComponentView(LayoutComponent.BUTTONS)?.view?.setOnTouchListener(ButtonsInputHandler(it, enableHapticFeedback, touchVibrator))
+             getLayoutComponentView(LayoutComponent.BUTTON_L)?.view?.setOnTouchListener(SingleButtonInputHandler(it, Input.L, enableHapticFeedback, touchVibrator))
+             getLayoutComponentView(LayoutComponent.BUTTON_L_SHORTCUT_TOGGLE)?.view?.setOnTouchListener(KhShortcutToggleInputHandler(it, enableHapticFeedback, touchVibrator))
+diff --git a/app/src/main/java/me/magnum/melonds/ui/emulator/input/KhCommandPadInputHandler.kt b/app/src/main/java/me/magnum/melonds/ui/emulator/input/KhCommandPadInputHandler.kt
+new file mode 100644
+index 0000000..3f07eb2
+--- /dev/null
++++ b/app/src/main/java/me/magnum/melonds/ui/emulator/input/KhCommandPadInputHandler.kt
+@@ -0,0 +1,15 @@
++package me.magnum.melonds.ui.emulator.input
++
++import me.magnum.melonds.common.vibration.TouchVibrator
++import me.magnum.melonds.domain.model.Input
++
++class KhCommandPadInputHandler(
++    inputListener: IInputListener,
++    enableHapticFeedback: Boolean,
++    touchVibrator: TouchVibrator,
++) : MultiButtonInputHandler(inputListener, enableHapticFeedback, touchVibrator) {
++    override fun getTopInput() = Input.KH_COMMAND_MENU_UP
++    override fun getLeftInput() = Input.KH_COMMAND_MENU_LEFT
++    override fun getBottomInput() = Input.KH_COMMAND_MENU_DOWN
++    override fun getRightInput() = Input.KH_COMMAND_MENU_RIGHT
++}
+diff --git a/app/src/main/java/me/magnum/melonds/ui/emulator/input/KhMovementStickInputHandler.kt b/app/src/main/java/me/magnum/melonds/ui/emulator/input/KhMovementStickInputHandler.kt
+new file mode 100644
+index 0000000..afcd898
+--- /dev/null
++++ b/app/src/main/java/me/magnum/melonds/ui/emulator/input/KhMovementStickInputHandler.kt
+@@ -0,0 +1,76 @@
++package me.magnum.melonds.ui.emulator.input
++
++import android.view.MotionEvent
++import android.view.View
++import me.magnum.melonds.common.vibration.TouchVibrator
++import me.magnum.melonds.domain.model.Input
++import me.magnum.melonds.ui.common.input.KhCameraStickView
++import kotlin.math.sqrt
++
++class KhMovementStickInputHandler(
++    inputListener: IInputListener,
++    enableHapticFeedback: Boolean,
++    touchVibrator: TouchVibrator,
++) : FeedbackInputHandler(inputListener, enableHapticFeedback, touchVibrator) {
++    private var activePointerId = MotionEvent.INVALID_POINTER_ID
++    private var originX = 0f
++    private var originY = 0f
++    private val pressedInputs = mutableSetOf<Input>()
++
++    override fun onTouch(view: View, event: MotionEvent): Boolean {
++        val stickView = view as? KhCameraStickView ?: return false
++        when (event.actionMasked) {
++            MotionEvent.ACTION_DOWN -> {
++                activePointerId = event.getPointerId(0)
++                originX = event.x
++                originY = event.y
++                stickView.beginTouch(originX, originY)
++                performHapticFeedback(view, HapticFeedbackType.KEY_PRESS)
++            }
++            MotionEvent.ACTION_MOVE -> {
++                val index = event.findPointerIndex(activePointerId)
++                if (index >= 0) updateMovement(stickView, event.getX(index), event.getY(index))
++            }
++            MotionEvent.ACTION_POINTER_UP -> if (event.getPointerId(event.actionIndex) == activePointerId) reset(stickView)
++            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> reset(stickView)
++        }
++        return true
++    }
++
++    private fun updateMovement(view: KhCameraStickView, touchX: Float, touchY: Float) {
++        val radius = (minOf(view.width, view.height) * 0.28f).coerceAtLeast(1f)
++        var x = (touchX - originX) / radius
++        var y = (touchY - originY) / radius
++        val magnitude = sqrt(x * x + y * y)
++        if (magnitude > 1f) {
++            x /= magnitude
++            y /= magnitude
++        }
++        view.setStickPosition(x, y)
++
++        val wanted = mutableSetOf<Input>()
++        if (magnitude >= DEADZONE) {
++            if (x <= -DIRECTION_THRESHOLD) wanted.add(Input.LEFT)
++            if (x >= DIRECTION_THRESHOLD) wanted.add(Input.RIGHT)
++            if (y <= -DIRECTION_THRESHOLD) wanted.add(Input.UP)
++            if (y >= DIRECTION_THRESHOLD) wanted.add(Input.DOWN)
++        }
++
++        pressedInputs.filterNot { it in wanted }.forEach(inputListener::onKeyReleased)
++        wanted.filterNot { it in pressedInputs }.forEach(inputListener::onKeyPress)
++        pressedInputs.clear()
++        pressedInputs.addAll(wanted)
++    }
++
++    private fun reset(view: KhCameraStickView) {
++        pressedInputs.forEach(inputListener::onKeyReleased)
++        pressedInputs.clear()
++        activePointerId = MotionEvent.INVALID_POINTER_ID
++        view.endTouch()
++    }
++
++    private companion object {
++        const val DEADZONE = 0.18f
++        const val DIRECTION_THRESHOLD = 0.30f
++    }
++}
+diff --git a/app/src/main/java/me/magnum/melonds/ui/layouteditor/EditorLayoutComponentViewBuilderFactory.kt b/app/src/main/java/me/magnum/melonds/ui/layouteditor/EditorLayoutComponentViewBuilderFactory.kt
+index ea4e600..6c91303 100644
+--- a/app/src/main/java/me/magnum/melonds/ui/layouteditor/EditorLayoutComponentViewBuilderFactory.kt
++++ b/app/src/main/java/me/magnum/melonds/ui/layouteditor/EditorLayoutComponentViewBuilderFactory.kt
+@@ -14,6 +14,8 @@ class EditorLayoutComponentViewBuilderFactory : LayoutComponentViewBuilderFactor
+                 LayoutComponent.TOP_SCREEN -> TopScreenLayoutComponentViewBuilder()
+                 LayoutComponent.BOTTOM_SCREEN -> BottomScreenLayoutComponentViewBuilder()
+                 LayoutComponent.DPAD -> EditorBackgroundLayoutComponentViewBuilder(DpadLayoutComponentViewBuilder())
++                LayoutComponent.MOVEMENT_STICK -> EditorBackgroundLayoutComponentViewBuilder(KhMovementStickLayoutComponentViewBuilder())
++                LayoutComponent.KH_COMMAND_PAD -> EditorBackgroundLayoutComponentViewBuilder(DpadLayoutComponentViewBuilder())
+                 LayoutComponent.BUTTONS -> EditorBackgroundLayoutComponentViewBuilder(ButtonsLayoutComponentViewBuilder())
+                 LayoutComponent.BUTTON_L_SHORTCUT_TOGGLE -> EditorBackgroundLayoutComponentViewBuilder(KhShortcutToggleLayoutComponentViewBuilder())
+                 LayoutComponent.KH_CAMERA_STICK -> EditorBackgroundLayoutComponentViewBuilder(KhCameraStickLayoutComponentViewBuilder())
+diff --git a/app/src/main/java/me/magnum/melonds/utils/InputUtils.kt b/app/src/main/java/me/magnum/melonds/utils/InputUtils.kt
+index c8365b5..400fc0e 100644
+--- a/app/src/main/java/me/magnum/melonds/utils/InputUtils.kt
++++ b/app/src/main/java/me/magnum/melonds/utils/InputUtils.kt
+@@ -8,6 +8,8 @@ fun getLayoutComponentName(layoutComponent: LayoutComponent): Int {
+         LayoutComponent.TOP_SCREEN -> R.string.top_screen
+         LayoutComponent.BOTTOM_SCREEN -> R.string.bottom_screen
+         LayoutComponent.DPAD -> R.string.input_dpad
++        LayoutComponent.MOVEMENT_STICK -> R.string.input_movement_stick
++        LayoutComponent.KH_COMMAND_PAD -> R.string.input_kh_command_pad
+         LayoutComponent.BUTTONS -> R.string.input_abxy_buttons
+         LayoutComponent.BUTTON_L -> R.string.input_l
+         LayoutComponent.BUTTON_L_SHORTCUT_TOGGLE -> R.string.input_l_shortcut_toggle
+diff --git a/app/src/main/res/values/strings.xml b/app/src/main/res/values/strings.xml
+index dd1e812..cbbeed7 100644
+--- a/app/src/main/res/values/strings.xml
++++ b/app/src/main/res/values/strings.xml
+@@ -397,6 +397,8 @@
+     <string name="input_kh_camera_right">KH: Camera Right</string>
+     <string name="input_kh_camera_stick">KH: Camera Stick</string>
+     <string name="input_l_shortcut_toggle">KH: Shortcut Toggle</string>
++    <string name="input_movement_stick">KH: Movement Stick</string>
++    <string name="input_kh_command_pad">KH: Command Pad</string>
+     <string name="kh_camera_sensitivity">KH camera sensitivity</string>
+ 
+     <string name="layouts">Layouts</string>
