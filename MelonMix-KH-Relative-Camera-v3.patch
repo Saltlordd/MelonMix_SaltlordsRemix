@@ -1,0 +1,126 @@
+diff --git a/app/src/main/java/me/magnum/melonds/ui/common/input/KhCameraStickView.kt b/app/src/main/java/me/magnum/melonds/ui/common/input/KhCameraStickView.kt
+index fb96c4f..f79c88a 100644
+--- a/app/src/main/java/me/magnum/melonds/ui/common/input/KhCameraStickView.kt
++++ b/app/src/main/java/me/magnum/melonds/ui/common/input/KhCameraStickView.kt
+@@ -24,6 +24,21 @@ class KhCameraStickView(context: Context) : View(context) {
+ 
+     private var stickX = 0f
+     private var stickY = 0f
++    private var originX = 0f
++    private var originY = 0f
++    private var active = false
++
++    fun beginTouch(x: Float, y: Float) {
++        originX = x
++        originY = y
++        active = true
++        setStickPosition(0f, 0f)
++    }
++
++    fun endTouch() {
++        active = false
++        setStickPosition(0f, 0f)
++    }
+ 
+     fun setStickPosition(x: Float, y: Float) {
+         stickX = x.coerceIn(-1f, 1f)
+@@ -34,14 +49,18 @@ class KhCameraStickView(context: Context) : View(context) {
+     override fun onDraw(canvas: Canvas) {
+         super.onDraw(canvas)
+         val size = min(width, height).toFloat()
+-        val centerX = width / 2f
+-        val centerY = height / 2f
++        val centerX = if (active) originX else width / 2f
++        val centerY = if (active) originY else height / 2f
+         val baseRadius = size * 0.46f
+         val knobRadius = size * 0.18f
+         val travelRadius = baseRadius - knobRadius
+ 
+-        canvas.drawCircle(centerX, centerY, baseRadius, basePaint)
+-        canvas.drawCircle(centerX, centerY, baseRadius, ringPaint)
++        if (active) {
++            canvas.drawCircle(centerX, centerY, baseRadius, basePaint)
++            canvas.drawCircle(centerX, centerY, baseRadius, ringPaint)
++        } else {
++            canvas.drawCircle(centerX, centerY, baseRadius, ringPaint)
++        }
+         canvas.drawCircle(
+             centerX + stickX * travelRadius,
+             centerY + stickY * travelRadius,
+diff --git a/app/src/main/java/me/magnum/melonds/ui/emulator/input/KhCameraStickInputHandler.kt b/app/src/main/java/me/magnum/melonds/ui/emulator/input/KhCameraStickInputHandler.kt
+index 4711e9d..ff339d6 100644
+--- a/app/src/main/java/me/magnum/melonds/ui/emulator/input/KhCameraStickInputHandler.kt
++++ b/app/src/main/java/me/magnum/melonds/ui/emulator/input/KhCameraStickInputHandler.kt
+@@ -5,6 +5,7 @@ import android.view.View
+ import me.magnum.melonds.MelonEmulator
+ import me.magnum.melonds.common.vibration.TouchVibrator
+ import me.magnum.melonds.ui.common.input.KhCameraStickView
++import kotlin.math.pow
+ import kotlin.math.sqrt
+ 
+ class KhCameraStickInputHandler(
+@@ -12,6 +13,8 @@ class KhCameraStickInputHandler(
+     private val touchVibrator: TouchVibrator,
+ ) : View.OnTouchListener {
+     private var activePointerId = MotionEvent.INVALID_POINTER_ID
++    private var originX = 0f
++    private var originY = 0f
+ 
+     override fun onTouch(view: View, event: MotionEvent): Boolean {
+         val stickView = view as? KhCameraStickView ?: return false
+@@ -19,8 +22,11 @@ class KhCameraStickInputHandler(
+         when (event.actionMasked) {
+             MotionEvent.ACTION_DOWN -> {
+                 activePointerId = event.getPointerId(0)
++                originX = event.x
++                originY = event.y
++                stickView.beginTouch(originX, originY)
+                 if (enableHapticFeedback) touchVibrator.performTouchHapticFeedback()
+-                updateCamera(stickView, event.x, event.y)
++                MelonEmulator.setKhCameraAxes(0f, 0f)
+             }
+             MotionEvent.ACTION_MOVE -> {
+                 val pointerIndex = event.findPointerIndex(activePointerId)
+@@ -38,8 +44,8 @@ class KhCameraStickInputHandler(
+ 
+     private fun updateCamera(view: KhCameraStickView, touchX: Float, touchY: Float) {
+         val radius = (minOf(view.width, view.height) * 0.28f).coerceAtLeast(1f)
+-        var x = (touchX - view.width / 2f) / radius
+-        var y = (touchY - view.height / 2f) / radius
++        var x = (touchX - originX) / radius
++        var y = (touchY - originY) / radius
+         val magnitude = sqrt(x * x + y * y)
+ 
+         if (magnitude > 1f) {
+@@ -49,22 +55,25 @@ class KhCameraStickInputHandler(
+             x = 0f
+             y = 0f
+         } else {
+-            val scaledMagnitude = (magnitude - DEADZONE) / (1f - DEADZONE)
+-            x = x / magnitude * scaledMagnitude
+-            y = y / magnitude * scaledMagnitude
++            val linearMagnitude = (magnitude - DEADZONE) / (1f - DEADZONE)
++            val curvedMagnitude = linearMagnitude.pow(RESPONSE_CURVE)
++            x = x / magnitude * curvedMagnitude
++            y = y / magnitude * curvedMagnitude
+         }
+ 
+         view.setStickPosition(x, y)
+-        MelonEmulator.setKhCameraAxes(x, y)
++        MelonEmulator.setKhCameraAxes(x * MAX_SPEED, y * MAX_SPEED)
+     }
+ 
+     private fun resetCamera(view: KhCameraStickView) {
+         activePointerId = MotionEvent.INVALID_POINTER_ID
+-        view.setStickPosition(0f, 0f)
++        view.endTouch()
+         MelonEmulator.setKhCameraAxes(0f, 0f)
+     }
+ 
+     private companion object {
+-        const val DEADZONE = 0.12f
++        const val DEADZONE = 0.08f
++        const val RESPONSE_CURVE = 1.6f
++        const val MAX_SPEED = 0.62f
+     }
+ }

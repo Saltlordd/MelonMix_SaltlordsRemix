@@ -1,0 +1,188 @@
+diff --git a/app/src/main/java/me/magnum/melonds/domain/model/layout/LayoutComponent.kt b/app/src/main/java/me/magnum/melonds/domain/model/layout/LayoutComponent.kt
+index 462f24b..f130311 100644
+--- a/app/src/main/java/me/magnum/melonds/domain/model/layout/LayoutComponent.kt
++++ b/app/src/main/java/me/magnum/melonds/domain/model/layout/LayoutComponent.kt
+@@ -10,6 +10,7 @@ enum class LayoutComponent(val matchingInputs: List<Input>) {
+     BUTTON_START(listOf(Input.START)),
+     BUTTON_SELECT(listOf(Input.SELECT)),
+     BUTTON_L(listOf(Input.L)),
++    BUTTON_L_SHORTCUT_TOGGLE(listOf(Input.L)),
+     BUTTON_R(listOf(Input.R)),
+     BUTTON_KH_LOCK_ON(listOf(Input.KH_LOCK_ON)),
+     KH_CAMERA_STICK(listOf(Input.KH_CAMERA_RIGHT, Input.KH_CAMERA_LEFT, Input.KH_CAMERA_DOWN, Input.KH_CAMERA_UP)),
+diff --git a/app/src/main/java/me/magnum/melonds/ui/common/componentbuilders/KhShortcutToggleLayoutComponentViewBuilder.kt b/app/src/main/java/me/magnum/melonds/ui/common/componentbuilders/KhShortcutToggleLayoutComponentViewBuilder.kt
+new file mode 100644
+index 0000000..dfacc55
+--- /dev/null
++++ b/app/src/main/java/me/magnum/melonds/ui/common/componentbuilders/KhShortcutToggleLayoutComponentViewBuilder.kt
+@@ -0,0 +1,12 @@
++package me.magnum.melonds.ui.common.componentbuilders
++
++import android.content.Context
++import android.view.View
++import me.magnum.melonds.ui.common.LayoutComponentViewBuilder
++import me.magnum.melonds.ui.common.input.KhShortcutToggleView
++
++class KhShortcutToggleLayoutComponentViewBuilder : LayoutComponentViewBuilder() {
++    override fun build(context: Context): View = KhShortcutToggleView(context)
++
++    override fun getAspectRatio() = 1f
++}
+diff --git a/app/src/main/java/me/magnum/melonds/ui/common/input/KhShortcutToggleView.kt b/app/src/main/java/me/magnum/melonds/ui/common/input/KhShortcutToggleView.kt
+new file mode 100644
+index 0000000..0948728
+--- /dev/null
++++ b/app/src/main/java/me/magnum/melonds/ui/common/input/KhShortcutToggleView.kt
+@@ -0,0 +1,48 @@
++package me.magnum.melonds.ui.common.input
++
++import android.content.Context
++import android.graphics.Canvas
++import android.graphics.Color
++import android.graphics.Paint
++import android.graphics.Typeface
++import android.view.View
++import kotlin.math.min
++
++class KhShortcutToggleView(context: Context) : View(context) {
++    private val backgroundPaint = Paint(Paint.ANTI_ALIAS_FLAG)
++    private val ringPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
++        color = Color.WHITE
++        style = Paint.Style.STROKE
++        strokeWidth = resources.displayMetrics.density * 2f
++    }
++    private val labelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
++        color = Color.WHITE
++        textAlign = Paint.Align.CENTER
++        typeface = Typeface.DEFAULT_BOLD
++    }
++
++    var isLatched = false
++        private set
++
++    fun setLatched(latched: Boolean) {
++        isLatched = latched
++        invalidate()
++    }
++
++    override fun onDraw(canvas: Canvas) {
++        super.onDraw(canvas)
++        val size = min(width, height).toFloat()
++        val centerX = width / 2f
++        val centerY = height / 2f
++        val radius = size * 0.46f
++
++        backgroundPaint.color = if (isLatched) Color.argb(205, 30, 125, 255) else Color.argb(135, 0, 0, 0)
++        canvas.drawCircle(centerX, centerY, radius, backgroundPaint)
++        canvas.drawCircle(centerX, centerY, radius, ringPaint)
++
++        labelPaint.textSize = size * 0.38f
++        canvas.drawText("L", centerX, centerY + size * 0.08f, labelPaint)
++        labelPaint.textSize = size * 0.105f
++        canvas.drawText(if (isLatched) "SHORTCUT ON" else "SHORTCUT", centerX, centerY + size * 0.30f, labelPaint)
++    }
++}
+diff --git a/app/src/main/java/me/magnum/melonds/ui/emulator/RuntimeLayoutComponentViewBuilderFactory.kt b/app/src/main/java/me/magnum/melonds/ui/emulator/RuntimeLayoutComponentViewBuilderFactory.kt
+index 726c478..64a26df 100644
+--- a/app/src/main/java/me/magnum/melonds/ui/emulator/RuntimeLayoutComponentViewBuilderFactory.kt
++++ b/app/src/main/java/me/magnum/melonds/ui/emulator/RuntimeLayoutComponentViewBuilderFactory.kt
+@@ -17,6 +17,7 @@ class RuntimeLayoutComponentViewBuilderFactory : LayoutComponentViewBuilderFacto
+                 LayoutComponent.BOTTOM_SCREEN -> RuntimeScreenLayoutComponentViewBuilder()
+                 LayoutComponent.DPAD -> DpadLayoutComponentViewBuilder()
+                 LayoutComponent.BUTTONS -> ButtonsLayoutComponentViewBuilder()
++                LayoutComponent.BUTTON_L_SHORTCUT_TOGGLE -> KhShortcutToggleLayoutComponentViewBuilder()
+                 LayoutComponent.KH_CAMERA_STICK -> KhCameraStickLayoutComponentViewBuilder()
+                 LayoutComponent.BUTTON_FAST_FORWARD_TOGGLE,
+                 LayoutComponent.BUTTON_MICROPHONE_TOGGLE,
+diff --git a/app/src/main/java/me/magnum/melonds/ui/emulator/RuntimeLayoutView.kt b/app/src/main/java/me/magnum/melonds/ui/emulator/RuntimeLayoutView.kt
+index b548f44..4e1adc9 100644
+--- a/app/src/main/java/me/magnum/melonds/ui/emulator/RuntimeLayoutView.kt
++++ b/app/src/main/java/me/magnum/melonds/ui/emulator/RuntimeLayoutView.kt
+@@ -15,6 +15,7 @@ import me.magnum.melonds.ui.emulator.input.DpadInputHandler
+ import me.magnum.melonds.ui.emulator.input.FrontendInputHandler
+ import me.magnum.melonds.ui.emulator.input.IInputListener
+ import me.magnum.melonds.ui.emulator.input.KhCameraStickInputHandler
++import me.magnum.melonds.ui.emulator.input.KhShortcutToggleInputHandler
+ import me.magnum.melonds.ui.emulator.input.SingleButtonInputHandler
+ import me.magnum.melonds.ui.emulator.input.TouchscreenInputHandler
+ import me.magnum.melonds.ui.emulator.input.view.ToggleableImageView
+@@ -94,6 +95,7 @@ class RuntimeLayoutView(context: Context, attrs: AttributeSet? = null) : LayoutV
+             getLayoutComponentView(LayoutComponent.DPAD)?.view?.setOnTouchListener(DpadInputHandler(it, enableHapticFeedback, touchVibrator))
+             getLayoutComponentView(LayoutComponent.BUTTONS)?.view?.setOnTouchListener(ButtonsInputHandler(it, enableHapticFeedback, touchVibrator))
+             getLayoutComponentView(LayoutComponent.BUTTON_L)?.view?.setOnTouchListener(SingleButtonInputHandler(it, Input.L, enableHapticFeedback, touchVibrator))
++            getLayoutComponentView(LayoutComponent.BUTTON_L_SHORTCUT_TOGGLE)?.view?.setOnTouchListener(KhShortcutToggleInputHandler(it, enableHapticFeedback, touchVibrator))
+             getLayoutComponentView(LayoutComponent.BUTTON_R)?.view?.setOnTouchListener(SingleButtonInputHandler(it, Input.R, enableHapticFeedback, touchVibrator))
+             getLayoutComponentView(LayoutComponent.BUTTON_KH_LOCK_ON)?.view?.setOnTouchListener(SingleButtonInputHandler(it, Input.KH_LOCK_ON, enableHapticFeedback, touchVibrator))
+             getLayoutComponentView(LayoutComponent.BUTTON_SELECT)?.view?.setOnTouchListener(SingleButtonInputHandler(it, Input.SELECT, enableHapticFeedback, touchVibrator))
+diff --git a/app/src/main/java/me/magnum/melonds/ui/emulator/input/KhShortcutToggleInputHandler.kt b/app/src/main/java/me/magnum/melonds/ui/emulator/input/KhShortcutToggleInputHandler.kt
+new file mode 100644
+index 0000000..5bef4ca
+--- /dev/null
++++ b/app/src/main/java/me/magnum/melonds/ui/emulator/input/KhShortcutToggleInputHandler.kt
+@@ -0,0 +1,30 @@
++package me.magnum.melonds.ui.emulator.input
++
++import android.view.MotionEvent
++import android.view.View
++import me.magnum.melonds.common.vibration.TouchVibrator
++import me.magnum.melonds.domain.model.Input
++import me.magnum.melonds.ui.common.input.KhShortcutToggleView
++
++class KhShortcutToggleInputHandler(
++    inputListener: IInputListener,
++    enableHapticFeedback: Boolean,
++    touchVibrator: TouchVibrator,
++) : FeedbackInputHandler(inputListener, enableHapticFeedback, touchVibrator) {
++
++    override fun onTouch(view: View, event: MotionEvent): Boolean {
++        val toggleView = view as? KhShortcutToggleView ?: return false
++        if (event.actionMasked != MotionEvent.ACTION_DOWN) return true
++
++        val latched = !toggleView.isLatched
++        toggleView.setLatched(latched)
++        if (latched) {
++            inputListener.onKeyPress(Input.L)
++            performHapticFeedback(view, HapticFeedbackType.KEY_PRESS)
++        } else {
++            inputListener.onKeyReleased(Input.L)
++            performHapticFeedback(view, HapticFeedbackType.KEY_RELEASE)
++        }
++        return true
++    }
++}
+diff --git a/app/src/main/java/me/magnum/melonds/ui/layouteditor/EditorLayoutComponentViewBuilderFactory.kt b/app/src/main/java/me/magnum/melonds/ui/layouteditor/EditorLayoutComponentViewBuilderFactory.kt
+index f1c2c4f..ea4e600 100644
+--- a/app/src/main/java/me/magnum/melonds/ui/layouteditor/EditorLayoutComponentViewBuilderFactory.kt
++++ b/app/src/main/java/me/magnum/melonds/ui/layouteditor/EditorLayoutComponentViewBuilderFactory.kt
+@@ -15,6 +15,7 @@ class EditorLayoutComponentViewBuilderFactory : LayoutComponentViewBuilderFactor
+                 LayoutComponent.BOTTOM_SCREEN -> BottomScreenLayoutComponentViewBuilder()
+                 LayoutComponent.DPAD -> EditorBackgroundLayoutComponentViewBuilder(DpadLayoutComponentViewBuilder())
+                 LayoutComponent.BUTTONS -> EditorBackgroundLayoutComponentViewBuilder(ButtonsLayoutComponentViewBuilder())
++                LayoutComponent.BUTTON_L_SHORTCUT_TOGGLE -> EditorBackgroundLayoutComponentViewBuilder(KhShortcutToggleLayoutComponentViewBuilder())
+                 LayoutComponent.KH_CAMERA_STICK -> EditorBackgroundLayoutComponentViewBuilder(KhCameraStickLayoutComponentViewBuilder())
+                 else -> EditorBackgroundLayoutComponentViewBuilder(SingleButtonLayoutComponentViewBuilder(layoutComponent))
+             }
+diff --git a/app/src/main/java/me/magnum/melonds/utils/InputUtils.kt b/app/src/main/java/me/magnum/melonds/utils/InputUtils.kt
+index ace8507..c8365b5 100644
+--- a/app/src/main/java/me/magnum/melonds/utils/InputUtils.kt
++++ b/app/src/main/java/me/magnum/melonds/utils/InputUtils.kt
+@@ -10,6 +10,7 @@ fun getLayoutComponentName(layoutComponent: LayoutComponent): Int {
+         LayoutComponent.DPAD -> R.string.input_dpad
+         LayoutComponent.BUTTONS -> R.string.input_abxy_buttons
+         LayoutComponent.BUTTON_L -> R.string.input_l
++        LayoutComponent.BUTTON_L_SHORTCUT_TOGGLE -> R.string.input_l_shortcut_toggle
+         LayoutComponent.BUTTON_R -> R.string.input_r
+         LayoutComponent.BUTTON_KH_LOCK_ON -> R.string.input_kh_lock_on
+         LayoutComponent.KH_CAMERA_STICK -> R.string.input_kh_camera_stick
+diff --git a/app/src/main/res/values/strings.xml b/app/src/main/res/values/strings.xml
+index 6a24ed8..dd1e812 100644
+--- a/app/src/main/res/values/strings.xml
++++ b/app/src/main/res/values/strings.xml
+@@ -396,6 +396,7 @@
+     <string name="input_kh_camera_left">KH: Camera Left</string>
+     <string name="input_kh_camera_right">KH: Camera Right</string>
+     <string name="input_kh_camera_stick">KH: Camera Stick</string>
++    <string name="input_l_shortcut_toggle">KH: Shortcut Toggle</string>
+     <string name="kh_camera_sensitivity">KH camera sensitivity</string>
+ 
+     <string name="layouts">Layouts</string>
