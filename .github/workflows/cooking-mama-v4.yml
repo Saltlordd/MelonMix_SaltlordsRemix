@@ -1,0 +1,41 @@
+name: Cooking Mama v4 - Build Lock On APK
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - .github/workflows/cooking-mama-v4.yml
+      - MelonMix-KH-Lock-On-touch-v1.patch
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Collect the full source
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up Java 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: "21"
+          distribution: zulu
+          cache: gradle
+
+      - name: Add the KH Lock On touchscreen button
+        run: git apply MelonMix-KH-Lock-On-touch-v1.patch
+
+      - name: Bake the debug APK using the project's Android 37 setup
+        run: |
+          chmod +x gradlew
+          ./gradlew :app:assembleGitHubProdDebug --stacktrace
+
+      - name: Package the APK for download
+        uses: actions/upload-artifact@v4
+        with:
+          name: MelonMix-KH-Lock-On-v1
+          path: app/build/outputs/apk/gitHubProd/debug/*.apk
+          if-no-files-found: error
+          retention-days: 7
