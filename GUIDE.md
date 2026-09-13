@@ -35,7 +35,7 @@ that it's about a minute. The APK ends up at
 Note: debug builds install as package `com.nireves333.melonmix.dev`, next to the
 release app (`com.nireves333.melonmix`). A signed release build is
 `:app:assembleGitHubProdRelease` with a keystore set through the `MELONDS_KEYSTORE*`
-entries in `local.properties`. The package name matters once, for the asset path in
+entries in `local.properties`. Both packages read the same asset folder from
 step 3.
 
 ## 2. First run
@@ -57,10 +57,12 @@ packs below are optional extras on top.
 
 These are the same packs desktop KH Melon Mix uses. Check the
 [KH Melon Mix project](https://github.com/vitor251093/KHMelonMix) for how to get
-them. Once you have them, copy them onto the device into this tree:
+them. They go into the `MelonMix` folder at the top level of the device's
+internal storage, right next to `Download`. Create it with any file manager if
+it isn't there yet, then copy the packs into this tree:
 
 ```
-Android/data/com.nireves333.melonmix/files/assets/    (add .dev for debug builds)
+MelonMix/assets/
 ├── days/
 │   ├── audio/<pack name>/bgm0.wav, bgm1.wav, ...
 │   ├── cutscenes/cinematics/hd802.mp4, hd803.mp4, ...
@@ -69,6 +71,15 @@ Android/data/com.nireves333.melonmix/files/assets/    (add .dev for debug builds
 └── recoded/
     └── audio/<pack name>/bgm0.flac, ... (+ bgm.ini)
 ```
+
+The app needs the **All files access** permission to read the folder. It asks on
+first launch, and the same switch is in *Settings > ROMs* along with the option
+to move the folder somewhere else, like an SD card.
+
+Coming from 1.0.0? Your packs are still in the old app folder under
+`Android/data`. The app finds them on launch and offers to move them to the new
+folder. Nothing is downloaded again, but the move can take a few minutes for
+large packs and needs enough free space for a copy while it runs.
 
 Some notes:
 
@@ -87,24 +98,34 @@ Some notes:
   On weaker hardware start at 1x and work your way up.
 - **Enhanced graphics** (*Video*): Turn it off and you get the
   stock dual screen DS view. (This turns off all Melon Mix features!!!)
+- **Single screen mode** (*Video*): On by default, everything is shown on one
+  enhanced screen. Turn it off on dual screen devices (like the AYN Thor) to
+  keep bottom screen content on the bottom screen. You keep the enhancements
+  (HD cutscenes, music, subtitles, controls), and both screens show in your
+  normal screen layout.
 - **Game language** (*System*): sets the language for in-game menus, the pause
   overlay and subtitles.
+- **Save files** (*Save Files*): saves and save states can be kept in a folder of
+  your choice too. Put them next to the asset packs and they survive a reinstall
+  and can be synced with tools like Syncthing.
 
 ## 5. When something looks wrong
 
-**White screen when starting a game.** You are probably using an EU or JP ROM.
-The Melon Mix enhancements only exist for the US versions, because the mod reads
-game memory at addresses that are only known for those. Use a US ROM. From the
-next release, EU and JP ROMs will at least boot and play, but as plain DS games
+**No enhancements with an EU or JP ROM.** The Melon Mix enhancements only exist
+for the US versions, because the mod reads game memory at addresses that are
+only known for those. EU and JP ROMs boot and play, but as plain DS games
 without any of the enhancements
 ([issue #10](https://github.com/Nireves333/melonMix-android/issues/10)).
+Use a US ROM for the full experience.
 
 **Games missing from the list.** Check the ROM folder in *Settings > ROMs*, then
 use *Refresh ROM list* from the menu.
 
-**Packs not detected.** Usually the path. Check the package name
-(`com.nireves333.melonmix`, plus `.dev` if you built a debug APK), a misspelled
-folder, or a music pack sitting directly in `audio/` instead of its own subfolder.
+**Packs not detected.** Usually the path or the permission. Check that the packs
+are under `MelonMix/assets/` on internal storage (*Settings > ROMs* shows the
+exact folder the app is looking at and whether it found anything), that storage
+access is granted, and that no folder is misspelled. A music pack has to sit in
+its own subfolder under `audio/`, not directly in it.
 
 **A cutscene played in DS graphics.** Only the pre-rendered cinematics have HD
 videos. In-engine and dialog scenes always run on the DS engine. A missing or
