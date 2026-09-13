@@ -1,0 +1,676 @@
+From d80bd1f03d5e813ab9c4ef9f12547283603141a0 Mon Sep 17 00:00:00 2001
+From: Codex <codex@local>
+Date: Sun, 13 Sep 2026 06:26:59 -0500
+Subject: [PATCH] Add configurable auto-hide, camera swipe zone, and button
+ labels
+
+---
+ .../domain/model/layout/LayoutComponent.kt    |  1 +
+ .../domain/repositories/SettingsRepository.kt |  2 +
+ .../SharedPreferencesSettingsRepository.kt    | 14 +++-
+ .../KhCameraSwipeZoneEditorViewBuilder.kt     | 22 +++++
+ ...meraSwipeZoneLayoutComponentViewBuilder.kt | 14 ++++
+ .../ui/common/input/KhActionButtonView.kt     | 39 +++++++--
+ .../ui/common/input/KhCameraSwipeZoneView.kt  | 65 +++++++++++++++
+ .../melonds/ui/emulator/EmulatorViewModel.kt  | 14 +++-
+ ...untimeLayoutComponentViewBuilderFactory.kt |  1 +
+ .../melonds/ui/emulator/RuntimeLayoutView.kt  | 33 +++-----
+ .../input/KhCameraSwipeInputHandler.kt        | 80 +++++++++++--------
+ .../model/RuntimeInputLayoutConfiguration.kt  |  4 +-
+ ...EditorLayoutComponentViewBuilderFactory.kt |  1 +
+ .../fragments/InputPreferencesFragment.kt     | 16 +++-
+ .../me/magnum/melonds/utils/InputUtils.kt     |  1 +
+ app/src/main/res/values/strings.xml           |  8 ++
+ app/src/main/res/xml/pref_input.xml           | 22 ++++-
+ 17 files changed, 266 insertions(+), 71 deletions(-)
+ create mode 100644 app/src/main/java/me/magnum/melonds/ui/common/componentbuilders/KhCameraSwipeZoneEditorViewBuilder.kt
+ create mode 100644 app/src/main/java/me/magnum/melonds/ui/common/componentbuilders/KhCameraSwipeZoneLayoutComponentViewBuilder.kt
+ create mode 100644 app/src/main/java/me/magnum/melonds/ui/common/input/KhCameraSwipeZoneView.kt
+
+diff --git a/app/src/main/java/me/magnum/melonds/domain/model/layout/LayoutComponent.kt b/app/src/main/java/me/magnum/melonds/domain/model/layout/LayoutComponent.kt
+index c56e49f..d5b2676 100644
+--- a/app/src/main/java/me/magnum/melonds/domain/model/layout/LayoutComponent.kt
++++ b/app/src/main/java/me/magnum/melonds/domain/model/layout/LayoutComponent.kt
+@@ -20,6 +20,7 @@ enum class LayoutComponent(val matchingInputs: List<Input>) {
+     BUTTON_R(listOf(Input.R)),
+     BUTTON_KH_LOCK_ON(listOf(Input.KH_LOCK_ON)),
+     KH_CAMERA_STICK(listOf(Input.KH_CAMERA_RIGHT, Input.KH_CAMERA_LEFT, Input.KH_CAMERA_DOWN, Input.KH_CAMERA_UP)),
++    KH_CAMERA_SWIPE_ZONE(emptyList()),
+     BUTTON_HINGE(listOf(Input.HINGE)),
+     BUTTON_FAST_FORWARD_TOGGLE(listOf(Input.FAST_FORWARD)),
+     BUTTON_TOGGLE_SOFT_INPUT(listOf(Input.TOGGLE_SOFT_INPUT)),
+diff --git a/app/src/main/java/me/magnum/melonds/domain/repositories/SettingsRepository.kt b/app/src/main/java/me/magnum/melonds/domain/repositories/SettingsRepository.kt
+index 86cab82..f3e52dd 100644
+--- a/app/src/main/java/me/magnum/melonds/domain/repositories/SettingsRepository.kt
++++ b/app/src/main/java/me/magnum/melonds/domain/repositories/SettingsRepository.kt
+@@ -72,6 +72,8 @@ interface SettingsRepository {
+     fun isTouchHapticFeedbackEnabled(): Flow<Boolean>
+     fun getTouchHapticFeedbackStrength(): Int
+     fun getSoftInputOpacity(): Flow<Int>
++    fun getSoftInputAutoHideSeconds(): Flow<Int>
++    fun getKhCameraSwipeTravelDp(): Flow<Int>
+ 
+     fun isRetroAchievementsRichPresenceEnabled(): Boolean
+     fun isRetroAchievementsHardcoreEnabled(): Boolean
+diff --git a/app/src/main/java/me/magnum/melonds/impl/SharedPreferencesSettingsRepository.kt b/app/src/main/java/me/magnum/melonds/impl/SharedPreferencesSettingsRepository.kt
+index a3077c4..2d340d6 100644
+--- a/app/src/main/java/me/magnum/melonds/impl/SharedPreferencesSettingsRepository.kt
++++ b/app/src/main/java/me/magnum/melonds/impl/SharedPreferencesSettingsRepository.kt
+@@ -540,6 +540,18 @@ class SharedPreferencesSettingsRepository(
+         }
+     }
+ 
++    override fun getSoftInputAutoHideSeconds(): Flow<Int> {
++        return getOrCreatePreferenceSharedFlow("input_auto_hide_seconds") {
++            preferences.getInt("input_auto_hide_seconds", 5).coerceIn(0, 60)
++        }
++    }
++
++    override fun getKhCameraSwipeTravelDp(): Flow<Int> {
++        return getOrCreatePreferenceSharedFlow("kh_camera_swipe_travel_dp") {
++            preferences.getInt("kh_camera_swipe_travel_dp", 72).coerceIn(32, 160)
++        }
++    }
++
+     override fun isRetroAchievementsRichPresenceEnabled(): Boolean {
+         return preferences.getBoolean("ra_rich_presence", true)
+     }
+@@ -669,4 +681,4 @@ class SharedPreferencesSettingsRepository(
+     override fun observeRenderConfiguration(): Flow<RendererConfiguration> {
+         return renderConfigurationFlow
+     }
+-}
+\ No newline at end of file
++}
+diff --git a/app/src/main/java/me/magnum/melonds/ui/common/componentbuilders/KhCameraSwipeZoneEditorViewBuilder.kt b/app/src/main/java/me/magnum/melonds/ui/common/componentbuilders/KhCameraSwipeZoneEditorViewBuilder.kt
+new file mode 100644
+index 0000000..bc32e24
+--- /dev/null
++++ b/app/src/main/java/me/magnum/melonds/ui/common/componentbuilders/KhCameraSwipeZoneEditorViewBuilder.kt
+@@ -0,0 +1,22 @@
++package me.magnum.melonds.ui.common.componentbuilders
++
++import android.content.Context
++import android.graphics.Color
++import android.view.Gravity
++import android.view.View
++import android.widget.TextView
++import androidx.core.content.ContextCompat
++import me.magnum.melonds.R
++import me.magnum.melonds.ui.common.LayoutComponentViewBuilder
++
++class KhCameraSwipeZoneEditorViewBuilder : LayoutComponentViewBuilder() {
++    override fun build(context: Context): View = TextView(context).apply {
++        text = context.getString(R.string.kh_camera_swipe_zone_editor_label)
++        gravity = Gravity.CENTER
++        setTextColor(Color.WHITE)
++        textSize = 12f
++        background = ContextCompat.getDrawable(context, R.drawable.background_uiview_selector)
++    }
++
++    override fun getAspectRatio() = 0.5f
++}
+diff --git a/app/src/main/java/me/magnum/melonds/ui/common/componentbuilders/KhCameraSwipeZoneLayoutComponentViewBuilder.kt b/app/src/main/java/me/magnum/melonds/ui/common/componentbuilders/KhCameraSwipeZoneLayoutComponentViewBuilder.kt
+new file mode 100644
+index 0000000..89424ef
+--- /dev/null
++++ b/app/src/main/java/me/magnum/melonds/ui/common/componentbuilders/KhCameraSwipeZoneLayoutComponentViewBuilder.kt
+@@ -0,0 +1,14 @@
++package me.magnum.melonds.ui.common.componentbuilders
++
++import android.content.Context
++import android.view.View
++import me.magnum.melonds.ui.common.LayoutComponentViewBuilder
++import me.magnum.melonds.ui.common.input.KhCameraSwipeZoneView
++
++/** Invisible at runtime; the layout editor supplies the visible placement guide. */
++class KhCameraSwipeZoneLayoutComponentViewBuilder : LayoutComponentViewBuilder() {
++    override fun build(context: Context): View = KhCameraSwipeZoneView(context)
++
++    // A tall half-screen touch area is a useful default on foldable inner displays.
++    override fun getAspectRatio() = 0.5f
++}
+diff --git a/app/src/main/java/me/magnum/melonds/ui/common/input/KhActionButtonView.kt b/app/src/main/java/me/magnum/melonds/ui/common/input/KhActionButtonView.kt
+index b3ddb13..1b0e5a5 100644
+--- a/app/src/main/java/me/magnum/melonds/ui/common/input/KhActionButtonView.kt
++++ b/app/src/main/java/me/magnum/melonds/ui/common/input/KhActionButtonView.kt
+@@ -38,9 +38,18 @@ class KhActionButtonView(
+         canvas.drawCircle(cx, cy, size * 0.46f, backgroundPaint)
+ 
+         when (component) {
+-            LayoutComponent.BUTTON_KH_ATTACK -> drawAttack(canvas, cx, cy, size)
+-            LayoutComponent.BUTTON_KH_JUMP -> drawJump(canvas, cx, cy, size)
+-            LayoutComponent.BUTTON_KH_GUARD -> drawGuard(canvas, cx, cy, size)
++            LayoutComponent.BUTTON_KH_ATTACK -> {
++                drawAttack(canvas, cx, cy - size * 0.055f, size)
++                drawSmallLetter(canvas, cx, cy, size, "A")
++            }
++            LayoutComponent.BUTTON_KH_JUMP -> {
++                drawJump(canvas, cx, cy - size * 0.055f, size)
++                drawSmallLetter(canvas, cx, cy, size, "B")
++            }
++            LayoutComponent.BUTTON_KH_GUARD -> {
++                drawGuard(canvas, cx, cy - size * 0.055f, size)
++                drawSmallLetter(canvas, cx, cy, size, "Y")
++            }
+             LayoutComponent.BUTTON_KH_X -> drawLetter(canvas, cx, cy, size, "X")
+             else -> Unit
+         }
+@@ -48,11 +57,20 @@ class KhActionButtonView(
+ 
+     private fun drawAttack(canvas: Canvas, cx: Float, cy: Float, size: Float) {
+         symbolPaint.style = Paint.Style.STROKE
+-        symbolPaint.strokeWidth = size * 0.075f
+-        canvas.drawLine(cx - size * 0.19f, cy + size * 0.22f, cx + size * 0.17f, cy - size * 0.20f, symbolPaint)
+-        canvas.drawLine(cx - size * 0.25f, cy + size * 0.09f, cx - size * 0.05f, cy + size * 0.27f, symbolPaint)
+-        canvas.drawLine(cx + size * 0.10f, cy - size * 0.21f, cx + size * 0.25f, cy - size * 0.21f, symbolPaint)
+-        canvas.drawLine(cx + size * 0.19f, cy - size * 0.28f, cx + size * 0.19f, cy - size * 0.13f, symbolPaint)
++        symbolPaint.strokeWidth = size * 0.06f
++        // Keyblade shaft and handle.
++        canvas.drawLine(cx - size * 0.18f, cy + size * 0.18f, cx + size * 0.16f, cy - size * 0.20f, symbolPaint)
++        canvas.drawLine(cx - size * 0.27f, cy + size * 0.08f, cx - size * 0.07f, cy + size * 0.26f, symbolPaint)
++        canvas.drawCircle(cx - size * 0.20f, cy + size * 0.22f, size * 0.055f, symbolPaint)
++        // The squared teeth make the silhouette read as a Keyblade, not a sword.
++        val teeth = Path().apply {
++            moveTo(cx + size * 0.11f, cy - size * 0.20f)
++            lineTo(cx + size * 0.27f, cy - size * 0.20f)
++            lineTo(cx + size * 0.27f, cy - size * 0.10f)
++            moveTo(cx + size * 0.20f, cy - size * 0.20f)
++            lineTo(cx + size * 0.20f, cy - size * 0.29f)
++        }
++        canvas.drawPath(teeth, symbolPaint)
+     }
+ 
+     private fun drawJump(canvas: Canvas, cx: Float, cy: Float, size: Float) {
+@@ -87,4 +105,9 @@ class KhActionButtonView(
+         labelPaint.textSize = size * 0.48f
+         canvas.drawText(letter, cx, cy - (labelPaint.ascent() + labelPaint.descent()) / 2f, labelPaint)
+     }
++
++    private fun drawSmallLetter(canvas: Canvas, cx: Float, cy: Float, size: Float, letter: String) {
++        labelPaint.textSize = size * 0.14f
++        canvas.drawText(letter, cx, cy + size * 0.36f, labelPaint)
++    }
+ }
+diff --git a/app/src/main/java/me/magnum/melonds/ui/common/input/KhCameraSwipeZoneView.kt b/app/src/main/java/me/magnum/melonds/ui/common/input/KhCameraSwipeZoneView.kt
+new file mode 100644
+index 0000000..281a8bf
+--- /dev/null
++++ b/app/src/main/java/me/magnum/melonds/ui/common/input/KhCameraSwipeZoneView.kt
+@@ -0,0 +1,65 @@
++package me.magnum.melonds.ui.common.input
++
++import android.content.Context
++import android.graphics.Canvas
++import android.graphics.Color
++import android.graphics.Paint
++import android.view.View
++
++/** A transparent touch surface that only draws its relative joystick while held. */
++class KhCameraSwipeZoneView(context: Context) : View(context) {
++    private val basePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
++        color = Color.argb(75, 20, 20, 20)
++        style = Paint.Style.FILL
++    }
++    private val ringPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
++        color = Color.argb(115, 255, 255, 255)
++        style = Paint.Style.STROKE
++        strokeWidth = resources.displayMetrics.density * 1.5f
++    }
++    private val knobPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
++        color = Color.argb(135, 255, 255, 255)
++        style = Paint.Style.FILL
++    }
++
++    private var originX = 0f
++    private var originY = 0f
++    private var axisX = 0f
++    private var axisY = 0f
++    private var radius = 1f
++    private var active = false
++
++    fun beginTouch(x: Float, y: Float, radius: Float) {
++        originX = x
++        originY = y
++        this.radius = radius.coerceAtLeast(1f)
++        active = true
++        setStickPosition(0f, 0f)
++    }
++
++    fun setStickPosition(x: Float, y: Float) {
++        axisX = x.coerceIn(-1f, 1f)
++        axisY = y.coerceIn(-1f, 1f)
++        invalidate()
++    }
++
++    fun endTouch() {
++        active = false
++        setStickPosition(0f, 0f)
++    }
++
++    override fun onDraw(canvas: Canvas) {
++        super.onDraw(canvas)
++        if (!active) return
++
++        val knobRadius = radius * 0.32f
++        canvas.drawCircle(originX, originY, radius, basePaint)
++        canvas.drawCircle(originX, originY, radius, ringPaint)
++        canvas.drawCircle(
++            originX + axisX * (radius - knobRadius),
++            originY + axisY * (radius - knobRadius),
++            knobRadius,
++            knobPaint,
++        )
++    }
++}
+diff --git a/app/src/main/java/me/magnum/melonds/ui/emulator/EmulatorViewModel.kt b/app/src/main/java/me/magnum/melonds/ui/emulator/EmulatorViewModel.kt
+index eac44a7..3817fc7 100644
+--- a/app/src/main/java/me/magnum/melonds/ui/emulator/EmulatorViewModel.kt
++++ b/app/src/main/java/me/magnum/melonds/ui/emulator/EmulatorViewModel.kt
+@@ -654,8 +654,12 @@ class EmulatorViewModel @Inject constructor(
+                 _currentLayout,
+                 settingsRepository.getSoftInputBehaviour(),
+                 settingsRepository.isTouchHapticFeedbackEnabled(),
+-                settingsRepository.getSoftInputOpacity(),
+-            ) { layoutConfiguration, variant, softInputBehaviour, isHapticFeedbackEnabled, inputOpacity ->
++                combine(
++                    settingsRepository.getSoftInputOpacity(),
++                    settingsRepository.getSoftInputAutoHideSeconds(),
++                    settingsRepository.getKhCameraSwipeTravelDp(),
++                ) { opacity, autoHideSeconds, swipeTravelDp -> Triple(opacity, autoHideSeconds, swipeTravelDp) },
++            ) { layoutConfiguration, variant, softInputBehaviour, isHapticFeedbackEnabled, inputSettings ->
+                 val layout = variant?.second
+                 if (layoutConfiguration == null || layout == null) {
+                     null
+@@ -663,12 +667,14 @@ class EmulatorViewModel @Inject constructor(
+                     val opacity = if (layoutConfiguration.useCustomOpacity) {
+                         layoutConfiguration.opacity
+                     } else {
+-                        inputOpacity
++                        inputSettings.first
+                     }
+ 
+                     RuntimeInputLayoutConfiguration(
+                         softInputBehaviour = softInputBehaviour,
+                         softInputOpacity = opacity,
++                        softInputAutoHideSeconds = inputSettings.second,
++                        khCameraSwipeTravelDp = inputSettings.third,
+                         isHapticFeedbackEnabled = isHapticFeedbackEnabled,
+                         layoutOrientation = layoutConfiguration.orientation,
+                         layout = layout,
+@@ -1180,4 +1186,4 @@ class EmulatorViewModel @Inject constructor(
+             currentCoroutineContext.cancel()
+         }
+     }
+-}
+\ No newline at end of file
++}
+diff --git a/app/src/main/java/me/magnum/melonds/ui/emulator/RuntimeLayoutComponentViewBuilderFactory.kt b/app/src/main/java/me/magnum/melonds/ui/emulator/RuntimeLayoutComponentViewBuilderFactory.kt
+index d9874d2..9b7877b 100644
+--- a/app/src/main/java/me/magnum/melonds/ui/emulator/RuntimeLayoutComponentViewBuilderFactory.kt
++++ b/app/src/main/java/me/magnum/melonds/ui/emulator/RuntimeLayoutComponentViewBuilderFactory.kt
+@@ -25,6 +25,7 @@ class RuntimeLayoutComponentViewBuilderFactory : LayoutComponentViewBuilderFacto
+                 LayoutComponent.BUTTON_KH_X -> KhActionButtonLayoutComponentViewBuilder(layoutComponent)
+                 LayoutComponent.BUTTON_L_SHORTCUT_TOGGLE -> KhShortcutToggleLayoutComponentViewBuilder()
+                 LayoutComponent.KH_CAMERA_STICK -> KhCameraStickLayoutComponentViewBuilder()
++                LayoutComponent.KH_CAMERA_SWIPE_ZONE -> KhCameraSwipeZoneLayoutComponentViewBuilder()
+                 LayoutComponent.BUTTON_FAST_FORWARD_TOGGLE,
+                 LayoutComponent.BUTTON_MICROPHONE_TOGGLE,
+                 LayoutComponent.BUTTON_TOGGLE_SOFT_INPUT -> ToggleableSingleButtonLayoutComponentViewBuilder(layoutComponent)
+diff --git a/app/src/main/java/me/magnum/melonds/ui/emulator/RuntimeLayoutView.kt b/app/src/main/java/me/magnum/melonds/ui/emulator/RuntimeLayoutView.kt
+index 79da2d8..2a05f19 100644
+--- a/app/src/main/java/me/magnum/melonds/ui/emulator/RuntimeLayoutView.kt
++++ b/app/src/main/java/me/magnum/melonds/ui/emulator/RuntimeLayoutView.kt
+@@ -4,7 +4,6 @@ import android.content.Context
+ import android.os.Handler
+ import android.os.Looper
+ import android.util.AttributeSet
+-import android.view.Gravity
+ import android.view.MotionEvent
+ import android.view.View
+ import androidx.core.view.isGone
+@@ -46,7 +45,6 @@ class RuntimeLayoutView(context: Context, attrs: AttributeSet? = null) : LayoutV
+     private var areScreensSwapped = false
+     private var connectedControllersState: ConnectedControllersState = ConnectedControllersState.NoControllers
+     private val autoHideHandler = Handler(Looper.getMainLooper())
+-    private val cameraSwipeView = View(context)
+     private val autoHideRunnable = Runnable { fadeSoftInputs() }
+ 
+     fun setFrontendInputHandler(frontendInputHandler: FrontendInputHandler) {
+@@ -87,7 +85,7 @@ class RuntimeLayoutView(context: Context, attrs: AttributeSet? = null) : LayoutV
+     fun instantiateLayout(runtimeLayout: RuntimeInputLayoutConfiguration, layoutTarget: LayoutTarget) {
+         currentRuntimeLayout = runtimeLayout
+         instantiateLayout(runtimeLayout.layout, layoutTarget)
+-        installCameraSwipeZone(layoutTarget)
++        placeCameraSwipeZoneBehindControls(layoutTarget)
+         updateInputs()
+         updateVisibility()
+         setLayoutComponentToggleState(LayoutComponent.BUTTON_TOGGLE_SOFT_INPUT, isSoftInputVisible)
+@@ -107,24 +105,12 @@ class RuntimeLayoutView(context: Context, attrs: AttributeSet? = null) : LayoutV
+         super.onDetachedFromWindow()
+     }
+ 
+-    private fun installCameraSwipeZone(layoutTarget: LayoutTarget) {
++    private fun placeCameraSwipeZoneBehindControls(layoutTarget: LayoutTarget) {
+         if (layoutTarget != LayoutTarget.MAIN_SCREEN) return
+-        cameraSwipeView.setOnTouchListener(KhCameraSwipeInputHandler())
+-        val params = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT).apply {
+-            width = 0
+-            gravity = Gravity.END
+-        }
+-        cameraSwipeView.layoutParams = params
+-        cameraSwipeView.post {
+-            cameraSwipeView.layoutParams = (cameraSwipeView.layoutParams as LayoutParams).apply {
+-                width = this@RuntimeLayoutView.width / 2
+-            }
+-        }
+-
+-        // Screens were inserted at the bottom and controls above them. Insert the camera
+-        // touchpad immediately above the screens so every visible control wins hit-testing.
++        val swipeZone = getLayoutComponentView(LayoutComponent.KH_CAMERA_SWIPE_ZONE)?.view ?: return
+         val screenCount = getLayoutComponentViews().count { it.component.isScreen() }
+-        addView(cameraSwipeView, screenCount, cameraSwipeView.layoutParams)
++        removeView(swipeZone)
++        addView(swipeZone, screenCount, swipeZone.layoutParams)
+     }
+ 
+     private fun showSoftInputsAndScheduleHide() {
+@@ -137,7 +123,10 @@ class RuntimeLayoutView(context: Context, attrs: AttributeSet? = null) : LayoutV
+                 it.view.alpha = inputAlpha
+             }
+         }
+-        autoHideHandler.postDelayed(autoHideRunnable, AUTO_HIDE_DELAY_MS)
++        val delaySeconds = currentRuntimeLayout?.softInputAutoHideSeconds ?: 5
++        if (delaySeconds > 0) {
++            autoHideHandler.postDelayed(autoHideRunnable, delaySeconds * 1_000L)
++        }
+     }
+ 
+     private fun fadeSoftInputs() {
+@@ -191,6 +180,9 @@ class RuntimeLayoutView(context: Context, attrs: AttributeSet? = null) : LayoutV
+         getLayoutComponentView(LayoutComponent.KH_CAMERA_STICK)?.view?.setOnTouchListener(
+             KhCameraStickInputHandler(enableHapticFeedback, touchVibrator)
+         )
++        getLayoutComponentView(LayoutComponent.KH_CAMERA_SWIPE_ZONE)?.view?.setOnTouchListener(
++            KhCameraSwipeInputHandler(currentRuntimeLayout.khCameraSwipeTravelDp)
++        )
+ 
+         getLayoutComponentViews().forEach {
+             if (!it.component.isScreen()) {
+@@ -270,7 +262,6 @@ class RuntimeLayoutView(context: Context, attrs: AttributeSet? = null) : LayoutV
+     }
+ 
+     private companion object {
+-        const val AUTO_HIDE_DELAY_MS = 5_000L
+         const val AUTO_HIDE_FADE_MS = 300L
+     }
+ }
+diff --git a/app/src/main/java/me/magnum/melonds/ui/emulator/input/KhCameraSwipeInputHandler.kt b/app/src/main/java/me/magnum/melonds/ui/emulator/input/KhCameraSwipeInputHandler.kt
+index 8f85e95..2c0a269 100644
+--- a/app/src/main/java/me/magnum/melonds/ui/emulator/input/KhCameraSwipeInputHandler.kt
++++ b/app/src/main/java/me/magnum/melonds/ui/emulator/input/KhCameraSwipeInputHandler.kt
+@@ -1,74 +1,86 @@
+ package me.magnum.melonds.ui.emulator.input
+ 
+-import android.os.Handler
+-import android.os.Looper
+ import android.view.MotionEvent
+ import android.view.View
+ import me.magnum.melonds.MelonEmulator
+-import kotlin.math.abs
++import me.magnum.melonds.ui.common.input.KhCameraSwipeZoneView
+ import kotlin.math.pow
++import kotlin.math.sqrt
+ 
+ /**
+  * Turns relative drags over an invisible touchpad into short camera-axis pulses.
+  * Relative deltas make every new touch the centre, unlike a fixed virtual stick.
+  */
+-class KhCameraSwipeInputHandler : View.OnTouchListener {
+-    private val handler = Handler(Looper.getMainLooper())
++class KhCameraSwipeInputHandler(
++    private val travelDp: Int,
++) : View.OnTouchListener {
+     private var pointerId = MotionEvent.INVALID_POINTER_ID
+-    private var lastX = 0f
+-    private var lastY = 0f
+-    private val stopCamera = Runnable { MelonEmulator.setKhCameraAxes(0f, 0f) }
++    private var originX = 0f
++    private var originY = 0f
+ 
+     override fun onTouch(view: View, event: MotionEvent): Boolean {
++        val swipeView = view as? KhCameraSwipeZoneView ?: return false
+         when (event.actionMasked) {
+             MotionEvent.ACTION_DOWN -> {
+                 pointerId = event.getPointerId(0)
+-                lastX = event.x
+-                lastY = event.y
+-                stop()
++                originX = event.x
++                originY = event.y
++                swipeView.beginTouch(originX, originY, travelRadius(view))
++                MelonEmulator.setKhCameraAxes(0f, 0f)
+             }
+             MotionEvent.ACTION_MOVE -> {
+                 val index = event.findPointerIndex(pointerId)
+                 if (index >= 0) {
+                     val x = event.getX(index)
+                     val y = event.getY(index)
+-                    val scale = view.resources.displayMetrics.density * PIXELS_PER_UNIT_DP
+-                    val axisX = curve(((x - lastX) / scale).coerceIn(-1f, 1f))
+-                    val axisY = curve(((y - lastY) / scale).coerceIn(-1f, 1f))
+-                    lastX = x
+-                    lastY = y
+-
+-                    if (abs(axisX) > DEADZONE || abs(axisY) > DEADZONE) {
+-                        MelonEmulator.setKhCameraAxes(axisX * MAX_SPEED, axisY * MAX_SPEED)
+-                        handler.removeCallbacks(stopCamera)
+-                        handler.postDelayed(stopCamera, PULSE_MS)
+-                    }
++                    updateCamera(swipeView, x, y)
+                 }
+             }
++            MotionEvent.ACTION_POINTER_UP -> {
++                if (event.getPointerId(event.actionIndex) == pointerId) resetCamera(swipeView)
++            }
+             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+-                pointerId = MotionEvent.INVALID_POINTER_ID
+-                stop()
++                resetCamera(swipeView)
+             }
+         }
+         return true
+     }
+ 
+-    private fun curve(value: Float): Float {
+-        if (abs(value) < DEADZONE) return 0f
+-        val sign = if (value < 0f) -1f else 1f
+-        return sign * abs(value).pow(RESPONSE_CURVE)
++    private fun updateCamera(view: KhCameraSwipeZoneView, touchX: Float, touchY: Float) {
++        val radius = travelRadius(view)
++        var x = (touchX - originX) / radius
++        var y = (touchY - originY) / radius
++        val magnitude = sqrt(x * x + y * y)
++
++        if (magnitude > 1f) {
++            x /= magnitude
++            y /= magnitude
++        } else if (magnitude < DEADZONE) {
++            x = 0f
++            y = 0f
++        } else {
++            val linearMagnitude = (magnitude - DEADZONE) / (1f - DEADZONE)
++            val curvedMagnitude = linearMagnitude.pow(RESPONSE_CURVE)
++            x = x / magnitude * curvedMagnitude
++            y = y / magnitude * curvedMagnitude
++        }
++
++        view.setStickPosition(x, y)
++        MelonEmulator.setKhCameraAxes(x * MAX_SPEED, y * MAX_SPEED)
+     }
+ 
+-    private fun stop() {
+-        handler.removeCallbacks(stopCamera)
++    private fun travelRadius(view: View): Float =
++        view.resources.displayMetrics.density * travelDp.coerceIn(32, 160)
++
++    private fun resetCamera(view: KhCameraSwipeZoneView) {
++        pointerId = MotionEvent.INVALID_POINTER_ID
++        view.endTouch()
+         MelonEmulator.setKhCameraAxes(0f, 0f)
+     }
+ 
+     private companion object {
+-        const val PIXELS_PER_UNIT_DP = 48f
+-        const val DEADZONE = 0.025f
+-        const val RESPONSE_CURVE = 1.25f
++        const val DEADZONE = 0.08f
++        const val RESPONSE_CURVE = 1.6f
+         const val MAX_SPEED = 0.62f
+-        const val PULSE_MS = 34L
+     }
+ }
+diff --git a/app/src/main/java/me/magnum/melonds/ui/emulator/model/RuntimeInputLayoutConfiguration.kt b/app/src/main/java/me/magnum/melonds/ui/emulator/model/RuntimeInputLayoutConfiguration.kt
+index b7a538d..0f2950f 100644
+--- a/app/src/main/java/me/magnum/melonds/ui/emulator/model/RuntimeInputLayoutConfiguration.kt
++++ b/app/src/main/java/me/magnum/melonds/ui/emulator/model/RuntimeInputLayoutConfiguration.kt
+@@ -7,7 +7,9 @@ import me.magnum.melonds.domain.model.layout.UILayout
+ data class RuntimeInputLayoutConfiguration(
+     val softInputBehaviour: SoftInputBehaviour,
+     val softInputOpacity: Int,
++    val softInputAutoHideSeconds: Int,
++    val khCameraSwipeTravelDp: Int,
+     val isHapticFeedbackEnabled: Boolean,
+     val layoutOrientation: LayoutConfiguration.LayoutOrientation,
+     val layout: UILayout,
+-)
+\ No newline at end of file
++)
+diff --git a/app/src/main/java/me/magnum/melonds/ui/layouteditor/EditorLayoutComponentViewBuilderFactory.kt b/app/src/main/java/me/magnum/melonds/ui/layouteditor/EditorLayoutComponentViewBuilderFactory.kt
+index 55dc4f6..7b2861a 100644
+--- a/app/src/main/java/me/magnum/melonds/ui/layouteditor/EditorLayoutComponentViewBuilderFactory.kt
++++ b/app/src/main/java/me/magnum/melonds/ui/layouteditor/EditorLayoutComponentViewBuilderFactory.kt
+@@ -23,6 +23,7 @@ class EditorLayoutComponentViewBuilderFactory : LayoutComponentViewBuilderFactor
+                 LayoutComponent.BUTTON_KH_X -> EditorBackgroundLayoutComponentViewBuilder(KhActionButtonLayoutComponentViewBuilder(layoutComponent))
+                 LayoutComponent.BUTTON_L_SHORTCUT_TOGGLE -> EditorBackgroundLayoutComponentViewBuilder(KhShortcutToggleLayoutComponentViewBuilder())
+                 LayoutComponent.KH_CAMERA_STICK -> EditorBackgroundLayoutComponentViewBuilder(KhCameraStickLayoutComponentViewBuilder())
++                LayoutComponent.KH_CAMERA_SWIPE_ZONE -> KhCameraSwipeZoneEditorViewBuilder()
+                 else -> EditorBackgroundLayoutComponentViewBuilder(SingleButtonLayoutComponentViewBuilder(layoutComponent))
+             }
+ 
+diff --git a/app/src/main/java/me/magnum/melonds/ui/settings/fragments/InputPreferencesFragment.kt b/app/src/main/java/me/magnum/melonds/ui/settings/fragments/InputPreferencesFragment.kt
+index 3c7900b..a4a72d9 100644
+--- a/app/src/main/java/me/magnum/melonds/ui/settings/fragments/InputPreferencesFragment.kt
++++ b/app/src/main/java/me/magnum/melonds/ui/settings/fragments/InputPreferencesFragment.kt
+@@ -29,6 +29,7 @@ class InputPreferencesFragment : BasePreferenceFragment(), PreferenceFragmentTit
+         softInputBehaviourPreference = findPreference("soft_input_behaviour")!!
+         val touchVibratePreference = findPreference<SwitchPreference>("input_touch_haptic_feedback_enabled")!!
+         val vibrationStrengthPreference = findPreference<SeekBarPreference>("input_touch_haptic_feedback_strength")!!
++        val autoHidePreference = findPreference<SeekBarPreference>("input_auto_hide_seconds")!!
+         val keyMappingPreference = findPreference<Preference>("input_key_mapping")!!
+         val layoutsPreference = findPreference<Preference>("input_layouts")!!
+ 
+@@ -42,6 +43,11 @@ class InputPreferencesFragment : BasePreferenceFragment(), PreferenceFragmentTit
+             vibrator.performTouchHapticFeedback(strength)
+             true
+         }
++        updateAutoHideSummary(autoHidePreference, autoHidePreference.value)
++        autoHidePreference.setOnPreferenceChangeListener { _, newValue ->
++            updateAutoHideSummary(autoHidePreference, newValue as Int)
++            true
++        }
+         keyMappingPreference.setOnPreferenceClickListener {
+             val intent = Intent(requireContext(), InputSetupActivity::class.java)
+             startActivity(intent)
+@@ -54,9 +60,17 @@ class InputPreferencesFragment : BasePreferenceFragment(), PreferenceFragmentTit
+         }
+     }
+ 
++    private fun updateAutoHideSummary(preference: SeekBarPreference, seconds: Int) {
++        preference.summary = if (seconds == 0) {
++            getString(R.string.soft_input_auto_hide_disabled)
++        } else {
++            getString(R.string.soft_input_auto_hide_seconds, seconds)
++        }
++    }
++
+     override fun onResume() {
+         super.onResume()
+         // Set proper value for soft input behaviour preference since the value is not updated when returning from the fragment
+         softInputBehaviourPreference.value = softInputBehaviourPreference.sharedPreferences?.getString(softInputBehaviourPreference.key, "hide_system_buttons_when_controller_connected")
+     }
+-}
+\ No newline at end of file
++}
+diff --git a/app/src/main/java/me/magnum/melonds/utils/InputUtils.kt b/app/src/main/java/me/magnum/melonds/utils/InputUtils.kt
+index 63a7410..36bd44f 100644
+--- a/app/src/main/java/me/magnum/melonds/utils/InputUtils.kt
++++ b/app/src/main/java/me/magnum/melonds/utils/InputUtils.kt
+@@ -20,6 +20,7 @@ fun getLayoutComponentName(layoutComponent: LayoutComponent): Int {
+         LayoutComponent.BUTTON_R -> R.string.input_r
+         LayoutComponent.BUTTON_KH_LOCK_ON -> R.string.input_kh_lock_on
+         LayoutComponent.KH_CAMERA_STICK -> R.string.input_kh_camera_stick
++        LayoutComponent.KH_CAMERA_SWIPE_ZONE -> R.string.input_kh_camera_swipe_zone
+         LayoutComponent.BUTTON_START -> R.string.input_start
+         LayoutComponent.BUTTON_SELECT -> R.string.input_select
+         LayoutComponent.BUTTON_HINGE -> R.string.input_lid
+diff --git a/app/src/main/res/values/strings.xml b/app/src/main/res/values/strings.xml
+index 6a72d2c..60d6e59 100644
+--- a/app/src/main/res/values/strings.xml
++++ b/app/src/main/res/values/strings.xml
+@@ -304,6 +304,14 @@
+     <string name="vibrate_on_touch">Vibrate on touch</string>
+     <string name="vibration_strength">Vibration strength</string>
+     <string name="soft_input_opacity">Soft input opacity</string>
++    <string name="soft_input_auto_hide_delay">Auto-hide controls delay</string>
++    <string name="soft_input_auto_hide_disabled">Off — controls stay visible</string>
++    <string name="soft_input_auto_hide_seconds">%1$d seconds</string>
++    <string name="soft_input_auto_hide_five_seconds">5 seconds</string>
++    <string name="input_kh_camera_swipe_zone">KH: Camera swipe zone</string>
++    <string name="kh_camera_swipe_zone_editor_label">CAMERA\nSWIPE ZONE\n(appears only while touched)</string>
++    <string name="kh_camera_swipe_travel">Swipe camera travel</string>
++    <string name="kh_camera_swipe_travel_summary">Distance from the initial touch needed for full camera speed (dp)</string>
+     <string name="retroachievements">RetroAchievements</string> <!-- Keep words together because this is the official name -->
+     <string name="retroachievements_summary">Login &amp; manage RetroAchievements integration</string> <!-- Keep words together because this is the official name -->
+     <string name="enable_rich_presence">Enable rich presence</string>
+diff --git a/app/src/main/res/xml/pref_input.xml b/app/src/main/res/xml/pref_input.xml
+index a7b09f2..7fc09ed 100644
+--- a/app/src/main/res/xml/pref_input.xml
++++ b/app/src/main/res/xml/pref_input.xml
+@@ -50,6 +50,16 @@
+             android:defaultValue="50"
+             android:max="100" />
+ 
++    <SeekBarPreference
++            android:key="input_auto_hide_seconds"
++            android:title="@string/soft_input_auto_hide_delay"
++            android:summary="@string/soft_input_auto_hide_five_seconds"
++            app:iconSpaceReserved="false"
++            app:showSeekBarValue="true"
++            android:defaultValue="5"
++            app:min="0"
++            android:max="60" />
++
+     <!-- [KHMM] camera-stick speed for the KH games. Desktop exposes 1-4 in whole steps
+          (an integer bit-shift, each step DOUBLES the speed — too coarse on the RG505);
+          we add half-steps, stored as half-units 2-8. Applies live. -->
+@@ -61,4 +71,14 @@
+             android:entryValues="@array/kh_camera_speed_values"
+             android:defaultValue="4"
+             app:iconSpaceReserved="false" />
+-</PreferenceScreen>
+\ No newline at end of file
++
++    <SeekBarPreference
++            android:key="kh_camera_swipe_travel_dp"
++            android:title="@string/kh_camera_swipe_travel"
++            android:summary="@string/kh_camera_swipe_travel_summary"
++            app:iconSpaceReserved="false"
++            app:showSeekBarValue="true"
++            android:defaultValue="72"
++            app:min="32"
++            android:max="160" />
++</PreferenceScreen>
+-- 
+2.51.1
+
