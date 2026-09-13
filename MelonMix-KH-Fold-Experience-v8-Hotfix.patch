@@ -1,0 +1,12 @@
+diff --git a/app/src/main/java/me/magnum/melonds/ui/emulator/RuntimeLayoutView.kt b/app/src/main/java/me/magnum/melonds/ui/emulator/RuntimeLayoutView.kt
+index 19b0807..79da2d8 100644
+--- a/app/src/main/java/me/magnum/melonds/ui/emulator/RuntimeLayoutView.kt
++++ b/app/src/main/java/me/magnum/melonds/ui/emulator/RuntimeLayoutView.kt
+@@ -10,6 +10,7 @@ import android.view.View
+ import androidx.core.view.isGone
+ import androidx.core.view.isVisible
+ import dagger.hilt.android.AndroidEntryPoint
++import me.magnum.melonds.MelonEmulator
+ import me.magnum.melonds.common.vibration.TouchVibrator
+ import me.magnum.melonds.domain.model.Input
+ import me.magnum.melonds.domain.model.input.SoftInputBehaviour
