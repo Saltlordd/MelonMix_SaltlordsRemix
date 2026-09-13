@@ -1,0 +1,207 @@
+diff --git a/app/src/main/java/me/magnum/melonds/domain/model/layout/LayoutComponent.kt b/app/src/main/java/me/magnum/melonds/domain/model/layout/LayoutComponent.kt
+index aba1907..c56e49f 100644
+--- a/app/src/main/java/me/magnum/melonds/domain/model/layout/LayoutComponent.kt
++++ b/app/src/main/java/me/magnum/melonds/domain/model/layout/LayoutComponent.kt
+@@ -9,6 +9,10 @@ enum class LayoutComponent(val matchingInputs: List<Input>) {
+     MOVEMENT_STICK(listOf(Input.UP, Input.DOWN, Input.LEFT, Input.RIGHT)),
+     KH_COMMAND_PAD(listOf(Input.KH_COMMAND_MENU_UP, Input.KH_COMMAND_MENU_DOWN, Input.KH_COMMAND_MENU_LEFT, Input.KH_COMMAND_MENU_RIGHT)),
+     BUTTONS(listOf(Input.A, Input.B, Input.X, Input.Y)),
++    BUTTON_KH_ATTACK(listOf(Input.A)),
++    BUTTON_KH_JUMP(listOf(Input.B)),
++    BUTTON_KH_GUARD(listOf(Input.Y)),
++    BUTTON_KH_X(listOf(Input.X)),
+     BUTTON_START(listOf(Input.START)),
+     BUTTON_SELECT(listOf(Input.SELECT)),
+     BUTTON_L(listOf(Input.L)),
+diff --git a/app/src/main/java/me/magnum/melonds/ui/common/componentbuilders/KhActionButtonLayoutComponentViewBuilder.kt b/app/src/main/java/me/magnum/melonds/ui/common/componentbuilders/KhActionButtonLayoutComponentViewBuilder.kt
+new file mode 100644
+index 0000000..3de6edc
+--- /dev/null
++++ b/app/src/main/java/me/magnum/melonds/ui/common/componentbuilders/KhActionButtonLayoutComponentViewBuilder.kt
+@@ -0,0 +1,15 @@
++package me.magnum.melonds.ui.common.componentbuilders
++
++import android.content.Context
++import android.view.View
++import me.magnum.melonds.domain.model.layout.LayoutComponent
++import me.magnum.melonds.ui.common.LayoutComponentViewBuilder
++import me.magnum.melonds.ui.common.input.KhActionButtonView
++
++class KhActionButtonLayoutComponentViewBuilder(
++    private val component: LayoutComponent,
++) : LayoutComponentViewBuilder() {
++    override fun build(context: Context): View = KhActionButtonView(context, component)
++
++    override fun getAspectRatio() = 1f
++}
+diff --git a/app/src/main/java/me/magnum/melonds/ui/common/input/KhActionButtonView.kt b/app/src/main/java/me/magnum/melonds/ui/common/input/KhActionButtonView.kt
+new file mode 100644
+index 0000000..b3ddb13
+--- /dev/null
++++ b/app/src/main/java/me/magnum/melonds/ui/common/input/KhActionButtonView.kt
+@@ -0,0 +1,90 @@
++package me.magnum.melonds.ui.common.input
++
++import android.content.Context
++import android.graphics.Canvas
++import android.graphics.Color
++import android.graphics.Paint
++import android.graphics.Path
++import android.graphics.Typeface
++import android.view.View
++import me.magnum.melonds.domain.model.layout.LayoutComponent
++import kotlin.math.min
++
++class KhActionButtonView(
++    context: Context,
++    private val component: LayoutComponent,
++) : View(context) {
++    private val backgroundPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
++        color = Color.argb(135, 0, 0, 0)
++        style = Paint.Style.FILL
++    }
++    private val symbolPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
++        color = Color.WHITE
++        strokeWidth = resources.displayMetrics.density * 3f
++        strokeCap = Paint.Cap.ROUND
++        strokeJoin = Paint.Join.ROUND
++    }
++    private val labelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
++        color = Color.WHITE
++        textAlign = Paint.Align.CENTER
++        typeface = Typeface.DEFAULT_BOLD
++    }
++
++    override fun onDraw(canvas: Canvas) {
++        super.onDraw(canvas)
++        val size = min(width, height).toFloat()
++        val cx = width / 2f
++        val cy = height / 2f
++        canvas.drawCircle(cx, cy, size * 0.46f, backgroundPaint)
++
++        when (component) {
++            LayoutComponent.BUTTON_KH_ATTACK -> drawAttack(canvas, cx, cy, size)
++            LayoutComponent.BUTTON_KH_JUMP -> drawJump(canvas, cx, cy, size)
++            LayoutComponent.BUTTON_KH_GUARD -> drawGuard(canvas, cx, cy, size)
++            LayoutComponent.BUTTON_KH_X -> drawLetter(canvas, cx, cy, size, "X")
++            else -> Unit
++        }
++    }
++
++    private fun drawAttack(canvas: Canvas, cx: Float, cy: Float, size: Float) {
++        symbolPaint.style = Paint.Style.STROKE
++        symbolPaint.strokeWidth = size * 0.075f
++        canvas.drawLine(cx - size * 0.19f, cy + size * 0.22f, cx + size * 0.17f, cy - size * 0.20f, symbolPaint)
++        canvas.drawLine(cx - size * 0.25f, cy + size * 0.09f, cx - size * 0.05f, cy + size * 0.27f, symbolPaint)
++        canvas.drawLine(cx + size * 0.10f, cy - size * 0.21f, cx + size * 0.25f, cy - size * 0.21f, symbolPaint)
++        canvas.drawLine(cx + size * 0.19f, cy - size * 0.28f, cx + size * 0.19f, cy - size * 0.13f, symbolPaint)
++    }
++
++    private fun drawJump(canvas: Canvas, cx: Float, cy: Float, size: Float) {
++        symbolPaint.style = Paint.Style.STROKE
++        symbolPaint.strokeWidth = size * 0.065f
++        val path = Path().apply {
++            moveTo(cx - size * 0.23f, cy + size * 0.20f)
++            lineTo(cx, cy - size * 0.22f)
++            lineTo(cx + size * 0.23f, cy + size * 0.20f)
++            moveTo(cx, cy - size * 0.22f)
++            lineTo(cx, cy + size * 0.25f)
++        }
++        canvas.drawPath(path, symbolPaint)
++    }
++
++    private fun drawGuard(canvas: Canvas, cx: Float, cy: Float, size: Float) {
++        symbolPaint.style = Paint.Style.STROKE
++        symbolPaint.strokeWidth = size * 0.055f
++        val path = Path().apply {
++            moveTo(cx, cy - size * 0.27f)
++            lineTo(cx + size * 0.24f, cy - size * 0.15f)
++            lineTo(cx + size * 0.18f, cy + size * 0.16f)
++            lineTo(cx, cy + size * 0.29f)
++            lineTo(cx - size * 0.18f, cy + size * 0.16f)
++            lineTo(cx - size * 0.24f, cy - size * 0.15f)
++            close()
++        }
++        canvas.drawPath(path, symbolPaint)
++    }
++
++    private fun drawLetter(canvas: Canvas, cx: Float, cy: Float, size: Float, letter: String) {
++        labelPaint.textSize = size * 0.48f
++        canvas.drawText(letter, cx, cy - (labelPaint.ascent() + labelPaint.descent()) / 2f, labelPaint)
++    }
++}
+diff --git a/app/src/main/java/me/magnum/melonds/ui/emulator/RuntimeLayoutComponentViewBuilderFactory.kt b/app/src/main/java/me/magnum/melonds/ui/emulator/RuntimeLayoutComponentViewBuilderFactory.kt
+index de6d4f6..d9874d2 100644
+--- a/app/src/main/java/me/magnum/melonds/ui/emulator/RuntimeLayoutComponentViewBuilderFactory.kt
++++ b/app/src/main/java/me/magnum/melonds/ui/emulator/RuntimeLayoutComponentViewBuilderFactory.kt
+@@ -19,6 +19,10 @@ class RuntimeLayoutComponentViewBuilderFactory : LayoutComponentViewBuilderFacto
+                 LayoutComponent.MOVEMENT_STICK -> KhMovementStickLayoutComponentViewBuilder()
+                 LayoutComponent.KH_COMMAND_PAD -> DpadLayoutComponentViewBuilder()
+                 LayoutComponent.BUTTONS -> ButtonsLayoutComponentViewBuilder()
++                LayoutComponent.BUTTON_KH_ATTACK,
++                LayoutComponent.BUTTON_KH_JUMP,
++                LayoutComponent.BUTTON_KH_GUARD,
++                LayoutComponent.BUTTON_KH_X -> KhActionButtonLayoutComponentViewBuilder(layoutComponent)
+                 LayoutComponent.BUTTON_L_SHORTCUT_TOGGLE -> KhShortcutToggleLayoutComponentViewBuilder()
+                 LayoutComponent.KH_CAMERA_STICK -> KhCameraStickLayoutComponentViewBuilder()
+                 LayoutComponent.BUTTON_FAST_FORWARD_TOGGLE,
+diff --git a/app/src/main/java/me/magnum/melonds/ui/emulator/RuntimeLayoutView.kt b/app/src/main/java/me/magnum/melonds/ui/emulator/RuntimeLayoutView.kt
+index 8d8f824..4c9da0e 100644
+--- a/app/src/main/java/me/magnum/melonds/ui/emulator/RuntimeLayoutView.kt
++++ b/app/src/main/java/me/magnum/melonds/ui/emulator/RuntimeLayoutView.kt
+@@ -98,6 +98,10 @@ class RuntimeLayoutView(context: Context, attrs: AttributeSet? = null) : LayoutV
+             getLayoutComponentView(LayoutComponent.MOVEMENT_STICK)?.view?.setOnTouchListener(KhMovementStickInputHandler(it, enableHapticFeedback, touchVibrator))
+             getLayoutComponentView(LayoutComponent.KH_COMMAND_PAD)?.view?.setOnTouchListener(KhCommandPadInputHandler(it, enableHapticFeedback, touchVibrator))
+             getLayoutComponentView(LayoutComponent.BUTTONS)?.view?.setOnTouchListener(ButtonsInputHandler(it, enableHapticFeedback, touchVibrator))
++            getLayoutComponentView(LayoutComponent.BUTTON_KH_ATTACK)?.view?.setOnTouchListener(SingleButtonInputHandler(it, Input.A, enableHapticFeedback, touchVibrator))
++            getLayoutComponentView(LayoutComponent.BUTTON_KH_JUMP)?.view?.setOnTouchListener(SingleButtonInputHandler(it, Input.B, enableHapticFeedback, touchVibrator))
++            getLayoutComponentView(LayoutComponent.BUTTON_KH_GUARD)?.view?.setOnTouchListener(SingleButtonInputHandler(it, Input.Y, enableHapticFeedback, touchVibrator))
++            getLayoutComponentView(LayoutComponent.BUTTON_KH_X)?.view?.setOnTouchListener(SingleButtonInputHandler(it, Input.X, enableHapticFeedback, touchVibrator))
+             getLayoutComponentView(LayoutComponent.BUTTON_L)?.view?.setOnTouchListener(SingleButtonInputHandler(it, Input.L, enableHapticFeedback, touchVibrator))
+             getLayoutComponentView(LayoutComponent.BUTTON_L_SHORTCUT_TOGGLE)?.view?.setOnTouchListener(KhShortcutToggleInputHandler(it, enableHapticFeedback, touchVibrator))
+             getLayoutComponentView(LayoutComponent.BUTTON_R)?.view?.setOnTouchListener(SingleButtonInputHandler(it, Input.R, enableHapticFeedback, touchVibrator))
+diff --git a/app/src/main/java/me/magnum/melonds/ui/layouteditor/EditorLayoutComponentViewBuilderFactory.kt b/app/src/main/java/me/magnum/melonds/ui/layouteditor/EditorLayoutComponentViewBuilderFactory.kt
+index 6c91303..55dc4f6 100644
+--- a/app/src/main/java/me/magnum/melonds/ui/layouteditor/EditorLayoutComponentViewBuilderFactory.kt
++++ b/app/src/main/java/me/magnum/melonds/ui/layouteditor/EditorLayoutComponentViewBuilderFactory.kt
+@@ -17,6 +17,10 @@ class EditorLayoutComponentViewBuilderFactory : LayoutComponentViewBuilderFactor
+                 LayoutComponent.MOVEMENT_STICK -> EditorBackgroundLayoutComponentViewBuilder(KhMovementStickLayoutComponentViewBuilder())
+                 LayoutComponent.KH_COMMAND_PAD -> EditorBackgroundLayoutComponentViewBuilder(DpadLayoutComponentViewBuilder())
+                 LayoutComponent.BUTTONS -> EditorBackgroundLayoutComponentViewBuilder(ButtonsLayoutComponentViewBuilder())
++                LayoutComponent.BUTTON_KH_ATTACK,
++                LayoutComponent.BUTTON_KH_JUMP,
++                LayoutComponent.BUTTON_KH_GUARD,
++                LayoutComponent.BUTTON_KH_X -> EditorBackgroundLayoutComponentViewBuilder(KhActionButtonLayoutComponentViewBuilder(layoutComponent))
+                 LayoutComponent.BUTTON_L_SHORTCUT_TOGGLE -> EditorBackgroundLayoutComponentViewBuilder(KhShortcutToggleLayoutComponentViewBuilder())
+                 LayoutComponent.KH_CAMERA_STICK -> EditorBackgroundLayoutComponentViewBuilder(KhCameraStickLayoutComponentViewBuilder())
+                 else -> EditorBackgroundLayoutComponentViewBuilder(SingleButtonLayoutComponentViewBuilder(layoutComponent))
+diff --git a/app/src/main/java/me/magnum/melonds/utils/InputUtils.kt b/app/src/main/java/me/magnum/melonds/utils/InputUtils.kt
+index 400fc0e..63a7410 100644
+--- a/app/src/main/java/me/magnum/melonds/utils/InputUtils.kt
++++ b/app/src/main/java/me/magnum/melonds/utils/InputUtils.kt
+@@ -11,6 +11,10 @@ fun getLayoutComponentName(layoutComponent: LayoutComponent): Int {
+         LayoutComponent.MOVEMENT_STICK -> R.string.input_movement_stick
+         LayoutComponent.KH_COMMAND_PAD -> R.string.input_kh_command_pad
+         LayoutComponent.BUTTONS -> R.string.input_abxy_buttons
++        LayoutComponent.BUTTON_KH_ATTACK -> R.string.input_kh_attack
++        LayoutComponent.BUTTON_KH_JUMP -> R.string.input_kh_jump
++        LayoutComponent.BUTTON_KH_GUARD -> R.string.input_kh_guard
++        LayoutComponent.BUTTON_KH_X -> R.string.input_kh_x
+         LayoutComponent.BUTTON_L -> R.string.input_l
+         LayoutComponent.BUTTON_L_SHORTCUT_TOGGLE -> R.string.input_l_shortcut_toggle
+         LayoutComponent.BUTTON_R -> R.string.input_r
+diff --git a/app/src/main/res/values/strings.xml b/app/src/main/res/values/strings.xml
+index 0973786..6a72d2c 100644
+--- a/app/src/main/res/values/strings.xml
++++ b/app/src/main/res/values/strings.xml
+@@ -427,6 +427,10 @@
+     <string name="snap_to_grid">Toggle grid snapping</string>
+     <string name="grid_snapping_enabled">Grid snapping enabled</string>
+     <string name="grid_snapping_disabled">Grid snapping disabled</string>
++    <string name="input_kh_attack">KH: Attack / Confirm</string>
++    <string name="input_kh_jump">KH: Jump / Cancel</string>
++    <string name="input_kh_guard">KH: Guard / Combo</string>
++    <string name="input_kh_x">KH: X / Menu</string>
+     <string name="kh_camera_sensitivity">KH camera sensitivity</string>
+ 
+     <string name="layouts">Layouts</string>
