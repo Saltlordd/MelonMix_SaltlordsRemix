@@ -1,0 +1,78 @@
+From c51dbd9d933c6976669dc3f440528e695b023765 Mon Sep 17 00:00:00 2001
+From: Codex <codex@local>
+Date: Sun, 13 Sep 2026 07:05:30 -0500
+Subject: [PATCH] Polish summoned sticks and action labels
+
+---
+ .../ui/common/input/KhActionButtonView.kt        | 10 +++++-----
+ .../melonds/ui/common/input/KhCameraStickView.kt | 16 ++++++++--------
+ 2 files changed, 13 insertions(+), 13 deletions(-)
+
+diff --git a/app/src/main/java/me/magnum/melonds/ui/common/input/KhActionButtonView.kt b/app/src/main/java/me/magnum/melonds/ui/common/input/KhActionButtonView.kt
+index 1b0e5a5..ed9871f 100644
+--- a/app/src/main/java/me/magnum/melonds/ui/common/input/KhActionButtonView.kt
++++ b/app/src/main/java/me/magnum/melonds/ui/common/input/KhActionButtonView.kt
+@@ -39,15 +39,15 @@ class KhActionButtonView(
+ 
+         when (component) {
+             LayoutComponent.BUTTON_KH_ATTACK -> {
+-                drawAttack(canvas, cx, cy - size * 0.055f, size)
++                drawAttack(canvas, cx, cy - size * 0.10f, size)
+                 drawSmallLetter(canvas, cx, cy, size, "A")
+             }
+             LayoutComponent.BUTTON_KH_JUMP -> {
+-                drawJump(canvas, cx, cy - size * 0.055f, size)
++                drawJump(canvas, cx, cy - size * 0.10f, size)
+                 drawSmallLetter(canvas, cx, cy, size, "B")
+             }
+             LayoutComponent.BUTTON_KH_GUARD -> {
+-                drawGuard(canvas, cx, cy - size * 0.055f, size)
++                drawGuard(canvas, cx, cy - size * 0.10f, size)
+                 drawSmallLetter(canvas, cx, cy, size, "Y")
+             }
+             LayoutComponent.BUTTON_KH_X -> drawLetter(canvas, cx, cy, size, "X")
+@@ -107,7 +107,7 @@ class KhActionButtonView(
+     }
+ 
+     private fun drawSmallLetter(canvas: Canvas, cx: Float, cy: Float, size: Float, letter: String) {
+-        labelPaint.textSize = size * 0.14f
+-        canvas.drawText(letter, cx, cy + size * 0.36f, labelPaint)
++        labelPaint.textSize = size * 0.11f
++        canvas.drawText(letter, cx, cy + size * 0.41f, labelPaint)
+     }
+ }
+diff --git a/app/src/main/java/me/magnum/melonds/ui/common/input/KhCameraStickView.kt b/app/src/main/java/me/magnum/melonds/ui/common/input/KhCameraStickView.kt
+index f79c88a..5ec1f6b 100644
+--- a/app/src/main/java/me/magnum/melonds/ui/common/input/KhCameraStickView.kt
++++ b/app/src/main/java/me/magnum/melonds/ui/common/input/KhCameraStickView.kt
+@@ -48,19 +48,19 @@ class KhCameraStickView(context: Context) : View(context) {
+ 
+     override fun onDraw(canvas: Canvas) {
+         super.onDraw(canvas)
++        // [KH touch] Both movement and camera sticks are touch zones at rest.
++        // Summon their visual joystick only while the player is actively holding them.
++        if (!active) return
++
+         val size = min(width, height).toFloat()
+-        val centerX = if (active) originX else width / 2f
+-        val centerY = if (active) originY else height / 2f
++        val centerX = originX
++        val centerY = originY
+         val baseRadius = size * 0.46f
+         val knobRadius = size * 0.18f
+         val travelRadius = baseRadius - knobRadius
+ 
+-        if (active) {
+-            canvas.drawCircle(centerX, centerY, baseRadius, basePaint)
+-            canvas.drawCircle(centerX, centerY, baseRadius, ringPaint)
+-        } else {
+-            canvas.drawCircle(centerX, centerY, baseRadius, ringPaint)
+-        }
++        canvas.drawCircle(centerX, centerY, baseRadius, basePaint)
++        canvas.drawCircle(centerX, centerY, baseRadius, ringPaint)
+         canvas.drawCircle(
+             centerX + stickX * travelRadius,
+             centerY + stickY * travelRadius,
+-- 
+2.51.1
+
