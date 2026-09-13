@@ -111,12 +111,15 @@ Some notes:
 
 ## 5. When something looks wrong
 
-**No enhancements with an EU or JP ROM.** The Melon Mix enhancements only exist
-for the US versions, because the mod reads game memory at addresses that are
-only known for those. EU and JP ROMs boot and play, but as plain DS games
-without any of the enhancements
-([issue #10](https://github.com/Nireves333/melonMix-android/issues/10)).
-Use a US ROM for the full experience.
+**Glitches with an EU or JP ROM.** EU and JP ROMs get the enhancements, but with
+limited support: the mod reads game memory at addresses that are only fully
+confirmed for the US versions, and upstream marks some EU and JP addresses as
+unverified. Expect graphical glitches, and scenes that briefly freeze and then
+snap back (the app detects a stuck scene and recovers after about 3 seconds
+instead of white-screening like older versions did,
+[issue #10](https://github.com/Nireves333/melonMix-android/issues/10)).
+Use a US ROM for the full experience. If an EU or JP ROM is unplayable, you can
+still turn off enhanced graphics and play it as a plain DS game.
 
 **Games missing from the list.** Check the ROM folder in *Settings > ROMs*, then
 use *Refresh ROM list* from the menu.
@@ -142,6 +145,9 @@ serious that I know of right now. Found a new bug or want a feature? Post it in
 - Re:coded can show a duplicated sliver of the notification header
   ([KHMelonMix#476](https://github.com/vitor251093/KHMelonMix/issues/476)). I'll
   pick up their fix when it lands.
+- With Single screen mode off (dual screen devices), some UI elements can break
+  up around the Sora memory scenes in Days. Dual screen mode has a list of rough
+  edges upstream too ([KHMelonMix#445](https://github.com/vitor251093/KHMelonMix/issues/445)).
 
 **Performance on other devices.** 64-bit with OpenGL ES 3.2 only (the JIT needs
 64-bit). Internal resolution matters the most here, some devices will run at 5x fine while other can only run 2x. 

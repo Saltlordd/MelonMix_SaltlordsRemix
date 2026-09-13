@@ -426,18 +426,29 @@ u32 MelonInstance::runFrame()
         nds->GPU.GetRenderer3D().SetOutputTexture(backBuffer, renderFrame->frameTexture);
     }
 
-    // [KHMM] Per-frame plugin update. The desktop frontend does two things each frame that
-    // our port was missing: refreshGameScene() (detect the current KH game scene by reading
-    // DS RAM; EmuThread.cpp:466, before RunFrame) and buildShapes() (rebuild the 2D/3D
-    // composite shape lists for that scene; EmuThread.cpp:534, after RunFrame). Both feed
-    // the GL compositor (gpuOpenGL_FS_updateVariables) and the 3D polygon-rewrite hook.
-    // Without them the scene stays undetected and the shape lists stay empty, so the
-    // composite renders nothing useful (blank/garbled). The compositor runs *inside*
-    // RunFrame here (GPU::Blit), so both must run just before it. Both are CPU-only.
+    // [KHMM] Per-frame plugin update, mirroring the desktop frame loop: refreshGameScene()
+    // (detect the current KH game scene by reading DS RAM; EmuThread.cpp:466, before
+    // RunFrame), buildShapes() (rebuild the 2D/3D composite shape lists; EmuThread.cpp:534,
+    // after RunFrame, ONLY on presented frames), and shouldRenderFrame() captured before
+    // RunFrame (EmuThread.cpp:467). Both shape/scene calls feed the GL compositor
+    // (gpuOpenGL_FS_updateVariables) and the 3D polygon-rewrite hook, and are CPU-only.
+    //
+    // The compositor runs *inside* RunFrame here (GPU::Blit), so buildShapes cannot run
+    // after RunFrame like desktop — instead it runs at the top of the NEXT frame, which is
+    // the same emulator state. The desktop gating still applies: skip it after a vetoed
+    // frame (khShouldPresentFrame false), because its pixel probes (e.g. bottom-screen
+    // blackness) must never read the hidden half of a double-3D scene.
     if (khPluginActive && plugin != nullptr && plugin->isReady())
     {
         plugin->refreshGameScene();
-        plugin->buildShapes();
+        if (khShouldPresentFrame)
+        {
+            plugin->buildShapes();
+        }
+        // Captured BEFORE RunFrame (desktop EmuThread.cpp:467): in double-3D scenes the
+        // game flips PowerControl9 during the frame, so a post-frame read would veto the
+        // wrong half (see khShouldPresentFrame in MelonInstance.h).
+        khShouldPresentFrame = plugin->shouldRenderFrame();
 
         // [KHMM] Per-frame plugin input processing, in desktop order (EmuThread.cpp:324-336):
         // camera touch-key mask first, then the hotkey hook, then the KH addon keys, then
@@ -519,6 +530,13 @@ u32 MelonInstance::runFrame()
         // frontend player (desktop: EmuThread.cpp:960-1000).
         KhBgm::pollPlugin(plugin);
     }
+    else
+    {
+        // Plugin driver not running (enhanced graphics off / plugin not ready): nothing
+        // vetoes, and a stale false must not skip buildShapes on the frame the driver
+        // comes back.
+        khShouldPresentFrame = true;
+    }
 
     // [KHMM] While an HD replacement video plays, the hidden DS prerendered cutscene races
     // to its end with the frame limiter bypassed (desktop: pluginShouldFastForward,
@@ -566,8 +584,25 @@ u32 MelonInstance::runFrame()
     // fast-forwarded frames between native detection and the video overlay appearing —
     // and for the off-screen half of Days' double-3D scenes. The frame still ran; only
     // its presentation is skipped, so the screen holds the last presented frame (by
-    // detection time that is the cutscene scene's black composite).
-    bool khVetoPresent = khPluginActive && plugin != nullptr && plugin->isReady() && !plugin->shouldRenderFrame();
+    // detection time that is the cutscene scene's black composite). Uses the value
+    // captured before RunFrame — do NOT call shouldRenderFrame() here (double-3D skew,
+    // see khShouldPresentFrame in MelonInstance.h).
+    bool khVetoPresent = khPluginActive && plugin != nullptr && plugin->isReady() && !khShouldPresentFrame;
+
+    // [KHMM] Misdetection guard (see khVetoHeldFrames in MelonInstance.h): a veto held for
+    // ~3 seconds with no replacement video running cannot be legitimate — the longest real
+    // no-video holds are the sub-second detection-to-video gap and the alternating halves
+    // of double-3D scenes (which reset the counter every other frame). Present anyway so a
+    // wrong RAM read (EU/JP carts) degrades to glitches instead of an eternal white screen.
+    if (khVetoPresent && !plugin->IsReplacementCutsceneRunning())
+    {
+        if (++khVetoHeldFrames > 180)
+            khVetoPresent = false;
+    }
+    else
+    {
+        khVetoHeldFrames = 0;
+    }
 
     bool isSleeping = nds->CPUStop & CPUStop_Sleep;
     if (!isSleeping && !khVetoPresent) [[likely]]
@@ -965,9 +1000,9 @@ void MelonInstance::loadPlugin(u32 gameCode)
     // unfilled per-region gamecode constants at 0 (PluginHarvestMoonDsCute eu/jp,
     // PluginMetroidPrimeHunters us/jp) and isCart() is a plain equality check, so
     // PluginManager::load(0) would hand back the Harvest Moon plugin.
-    // Non-US KH carts also resolve to the inert default plugin: their enhancement RAM
-    // address tables are unconfirmed/wrong upstream and white-screened the game at boot
-    // (see isEnhancedGameCode). They run as plain, unenhanced DS games.
+    // EU/JP KH carts load their plugin like US ones (limited support: partly unconfirmed
+    // RAM addresses upstream; the runFrame veto bound keeps a misread from white-screening
+    // the game — see isEnhancedGameCode).
     plugin = (gameCode == 0 || !MelonDSAndroid::isEnhancedGameCode(gameCode))
             ? new Plugins::PluginDefault(gameCode)
             : Plugins::PluginManager::load(gameCode);
