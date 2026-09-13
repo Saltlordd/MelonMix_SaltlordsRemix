@@ -1,0 +1,92 @@
+diff --git a/app/src/main/java/me/magnum/melonds/ui/emulator/RuntimeLayoutView.kt b/app/src/main/java/me/magnum/melonds/ui/emulator/RuntimeLayoutView.kt
+index ebbe0ba..f480dbf 100644
+--- a/app/src/main/java/me/magnum/melonds/ui/emulator/RuntimeLayoutView.kt
++++ b/app/src/main/java/me/magnum/melonds/ui/emulator/RuntimeLayoutView.kt
+@@ -85,7 +85,7 @@ class RuntimeLayoutView(context: Context, attrs: AttributeSet? = null) : LayoutV
+     fun instantiateLayout(runtimeLayout: RuntimeInputLayoutConfiguration, layoutTarget: LayoutTarget) {
+         currentRuntimeLayout = runtimeLayout
+         instantiateLayout(runtimeLayout.layout, layoutTarget)
+-        placeCameraSwipeZoneBehindControls(layoutTarget)
++        placeTouchZonesBehindControls(layoutTarget)
+         updateInputs()
+         updateVisibility()
+         setLayoutComponentToggleState(LayoutComponent.BUTTON_TOGGLE_SOFT_INPUT, isSoftInputVisible)
+@@ -106,12 +106,19 @@ class RuntimeLayoutView(context: Context, attrs: AttributeSet? = null) : LayoutV
+         super.onDetachedFromWindow()
+     }
+ 
+-    private fun placeCameraSwipeZoneBehindControls(layoutTarget: LayoutTarget) {
++    private fun placeTouchZonesBehindControls(layoutTarget: LayoutTarget) {
+         if (layoutTarget != LayoutTarget.MAIN_SCREEN) return
+-        val swipeZone = getLayoutComponentView(LayoutComponent.KH_CAMERA_SWIPE_ZONE)?.view ?: return
++
++        // Touch zones may cover a large part of the display. Keep them immediately
++        // above the rendered DS screens but below every ordinary control so an
++        // overlapping button always receives the gesture first.
++        val touchZones = listOf(LayoutComponent.MOVEMENT_STICK, LayoutComponent.KH_CAMERA_SWIPE_ZONE)
++            .mapNotNull { getLayoutComponentView(it)?.view }
+         val screenCount = getLayoutComponentViews().count { it.component.isScreen() }
+-        removeView(swipeZone)
+-        addView(swipeZone, screenCount, swipeZone.layoutParams)
++        touchZones.forEach { removeView(it) }
++        touchZones.forEachIndexed { index, zone ->
++            addView(zone, screenCount + index, zone.layoutParams)
++        }
+     }
+ 
+     private fun showSoftInputsAndScheduleHide() {
+diff --git a/app/src/main/res/values/strings.xml b/app/src/main/res/values/strings.xml
+index 8f18121..63003f4 100644
+--- a/app/src/main/res/values/strings.xml
++++ b/app/src/main/res/values/strings.xml
+@@ -308,13 +308,13 @@
+     <string name="soft_input_auto_hide_disabled">Off — controls stay visible</string>
+     <string name="soft_input_auto_hide_seconds">%1$d seconds</string>
+     <string name="soft_input_auto_hide_five_seconds">5 seconds</string>
+-    <string name="input_kh_camera_swipe_zone">KH: Camera swipe zone</string>
++    <string name="input_kh_camera_swipe_zone">KH Days + Re:coded: Camera touch zone</string>
+     <string name="kh_camera_swipe_zone_editor_label">CAMERA\nSWIPE ZONE\n(appears only while touched)</string>
+     <string name="kh_camera_swipe_travel">Swipe camera travel</string>
+     <string name="kh_camera_swipe_travel_summary">Distance from the initial touch needed for full camera speed (dp)</string>
+     <string name="kh_movement_swipe_travel">Movement joystick travel</string>
+     <string name="kh_movement_swipe_travel_summary">Summoned movement joystick radius, independent of its touch-zone size (dp)</string>
+-    <string name="input_kh_toggle_controls">KH: Hide controls</string>
++    <string name="input_kh_toggle_controls">KH Days + Re:coded: Hide controls</string>
+     <string name="retroachievements">RetroAchievements</string> <!-- Keep words together because this is the official name -->
+     <string name="retroachievements_summary">Login &amp; manage RetroAchievements integration</string> <!-- Keep words together because this is the official name -->
+     <string name="enable_rich_presence">Enable rich presence</string>
+@@ -414,7 +414,7 @@
+     <string name="input_quick_save">Quick Save</string>
+     <string name="input_quick_load">Quick Load</string>
+     <!-- [KHMM] KH Melon Mix controls (labels mirror desktop's customKeyMappingLabels) -->
+-    <string name="input_kh_lock_on">KH: Lock On</string>
++    <string name="input_kh_lock_on">KH Days + Re:coded: Lock On</string>
+     <string name="input_kh_switch_target_left">KH: Switch Target - Left</string>
+     <string name="input_kh_switch_target_right">KH: Switch Target - Right</string>
+     <string name="input_kh_command_menu_left">KH: Command Menu - Back</string>
+@@ -431,17 +431,17 @@
+     <string name="input_kh_camera_down">KH: Camera Down</string>
+     <string name="input_kh_camera_left">KH: Camera Left</string>
+     <string name="input_kh_camera_right">KH: Camera Right</string>
+-    <string name="input_kh_camera_stick">KH: Camera Stick</string>
+-    <string name="input_l_shortcut_toggle">KH: Shortcut Toggle</string>
+-    <string name="input_movement_stick">KH: Movement Stick</string>
+-    <string name="input_kh_command_pad">KH: Command Pad</string>
++    <string name="input_kh_camera_stick">KH Days + Re:coded: Camera Stick</string>
++    <string name="input_l_shortcut_toggle">KH Days + Re:coded: Shortcut Hold Toggle (L)</string>
++    <string name="input_movement_stick">KH Days + Re:coded: Movement touch zone</string>
++    <string name="input_kh_command_pad">KH Days + Re:coded: Command Pad</string>
+     <string name="snap_to_grid">Toggle grid snapping</string>
+     <string name="grid_snapping_enabled">Grid snapping enabled</string>
+     <string name="grid_snapping_disabled">Grid snapping disabled</string>
+-    <string name="input_kh_attack">KH: Attack / Confirm</string>
+-    <string name="input_kh_jump">KH: Jump / Cancel</string>
+-    <string name="input_kh_guard">KH: Guard / Combo</string>
+-    <string name="input_kh_x">KH: X / Menu</string>
++    <string name="input_kh_attack">KH Days + Re:coded: Attack / Confirm (A)</string>
++    <string name="input_kh_jump">KH Days + Re:coded: Jump / Cancel (B)</string>
++    <string name="input_kh_guard">KH Days + Re:coded: Guard / Ability (Y)</string>
++    <string name="input_kh_x">KH Days + Re:coded: X / Deck Command</string>
+     <string name="kh_camera_sensitivity">KH camera sensitivity</string>
+ 
+     <string name="layouts">Layouts</string>
