@@ -1,0 +1,85 @@
+name: Cooking Mama v18 - Build Scene-Aware KH Controls APK
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - .github/workflows/cooking-mama-v18.yml
+      - MelonMix-KH-Lock-On-touch-v1.patch
+      - MelonMix-KH-Camera-Stick-v2.patch
+      - MelonMix-KH-Relative-Camera-v3.patch
+      - MelonMix-KH-Shortcut-Toggle-v4.patch
+      - MelonMix-KH-Movement-and-Heart-v5.patch
+      - MelonMix-Layout-Grid-Snap-v6.patch
+      - MelonMix-KH-Action-Buttons-v7.patch
+      - MelonMix-KH-Fold-Experience-v8.patch
+      - MelonMix-KH-Fold-Experience-v8-Hotfix.patch
+      - MelonMix-KH-Touch-Polish-v9.patch
+      - MelonMix-KH-Final-Polish-v10.patch
+      - MelonMix-KH-Control-Zones-v11.patch
+      - MelonMix-KH-Control-Zones-v11-Hotfix.patch
+      - MelonMix-KH-Universal-Controls-v12.patch
+      - MelonMix-KH-Default-and-Scene-Controls-v13.patch
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Collect the full source
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up Java 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: "21"
+          distribution: zulu
+          cache: gradle
+
+      - name: Add Lock On
+        run: git apply MelonMix-KH-Lock-On-touch-v1.patch
+      - name: Add camera stick
+        run: git apply MelonMix-KH-Camera-Stick-v2.patch
+      - name: Add relative precision camera
+        run: git apply MelonMix-KH-Relative-Camera-v3.patch
+      - name: Add shortcut toggle
+        run: git apply MelonMix-KH-Shortcut-Toggle-v4.patch
+      - name: Add movement stick command pad and heart icon
+        run: git apply MelonMix-KH-Movement-and-Heart-v5.patch
+      - name: Add layout editor grid snapping
+        run: git apply MelonMix-Layout-Grid-Snap-v6.patch
+      - name: Add dedicated KH action buttons
+        run: git apply MelonMix-KH-Action-Buttons-v7.patch
+      - name: Add the Fold viewport and touch experience
+        run: git apply MelonMix-KH-Fold-Experience-v8.patch
+      - name: Apply the Fold Kotlin import hotfix
+        run: git apply MelonMix-KH-Fold-Experience-v8-Hotfix.patch
+      - name: Add touch polish and relative camera zone
+        run: git apply MelonMix-KH-Touch-Polish-v9.patch
+      - name: Add summoned movement stick and label spacing
+        run: git apply MelonMix-KH-Final-Polish-v10.patch
+      - name: Add independent control zones opacity and hide toggle
+        run: git apply MelonMix-KH-Control-Zones-v11.patch
+      - name: Fix per-control opacity compilation
+        run: git apply MelonMix-KH-Control-Zones-v11-Hotfix.patch
+      - name: Add universal KH labels and reliable zone layering
+        run: git apply MelonMix-KH-Universal-Controls-v12.patch
+      - name: Add the KH default preset and scene-aware controls
+        run: git apply MelonMix-KH-Default-and-Scene-Controls-v13.patch
+
+      - name: Give v18 its own app identity
+        run: sed -i 's/applicationIdSuffix = ".dev"/applicationIdSuffix = ".scenekh"/' app/build.gradle.kts
+
+      - name: Bake the scene-aware KH controls APK
+        run: |
+          chmod +x gradlew
+          ./gradlew :app:assembleGitHubProdDebug --stacktrace
+
+      - name: Package the APK for download
+        uses: actions/upload-artifact@v4
+        with:
+          name: MelonMix-KH-Touch-v13-Scene-Aware-Defaults
+          path: app/build/outputs/apk/gitHubProd/debug/*.apk
+          if-no-files-found: error
+          retention-days: 7
