@@ -1,0 +1,228 @@
+name: Cooking Mama v19 - Build KHDS Touch Remix APK
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - .github/workflows/cooking-mama-v19.yml
+      - MelonMix-KH-Lock-On-touch-v1.patch
+      - MelonMix-KH-Camera-Stick-v2.patch
+      - MelonMix-KH-Relative-Camera-v3.patch
+      - MelonMix-KH-Shortcut-Toggle-v4.patch
+      - MelonMix-KH-Movement-and-Heart-v5.patch
+      - MelonMix-Layout-Grid-Snap-v6.patch
+      - MelonMix-KH-Action-Buttons-v7.patch
+      - MelonMix-KH-Fold-Experience-v8.patch
+      - MelonMix-KH-Fold-Experience-v8-Hotfix.patch
+      - MelonMix-KH-Touch-Polish-v9.patch
+      - MelonMix-KH-Final-Polish-v10.patch
+      - MelonMix-KH-Control-Zones-v11.patch
+      - MelonMix-KH-Control-Zones-v11-Hotfix.patch
+      - MelonMix-KH-Universal-Controls-v12.patch
+      - MelonMix-KH-Default-and-Scene-Controls-v13.patch
+      - MelonMix-KH-Editable-Preset-and-Scene-Fades-v14.patch
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Collect the full source
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up Java 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: "21"
+          distribution: zulu
+          cache: gradle
+
+      - name: Add Lock On
+        run: git apply MelonMix-KH-Lock-On-touch-v1.patch
+      - name: Add camera stick
+        run: git apply MelonMix-KH-Camera-Stick-v2.patch
+      - name: Add relative precision camera
+        run: git apply MelonMix-KH-Relative-Camera-v3.patch
+      - name: Add shortcut toggle
+        run: git apply MelonMix-KH-Shortcut-Toggle-v4.patch
+      - name: Add movement stick command pad and heart icon
+        run: git apply MelonMix-KH-Movement-and-Heart-v5.patch
+      - name: Add layout editor grid snapping
+        run: git apply MelonMix-Layout-Grid-Snap-v6.patch
+      - name: Add dedicated KH action buttons
+        run: git apply MelonMix-KH-Action-Buttons-v7.patch
+      - name: Add the Fold viewport and touch experience
+        run: git apply MelonMix-KH-Fold-Experience-v8.patch
+      - name: Apply the Fold Kotlin import hotfix
+        run: git apply MelonMix-KH-Fold-Experience-v8-Hotfix.patch
+      - name: Add touch polish and relative camera zone
+        run: git apply MelonMix-KH-Touch-Polish-v9.patch
+      - name: Add summoned movement stick and label spacing
+        run: git apply MelonMix-KH-Final-Polish-v10.patch
+      - name: Add independent control zones opacity and hide toggle
+        run: git apply MelonMix-KH-Control-Zones-v11.patch
+      - name: Fix per-control opacity compilation
+        run: git apply MelonMix-KH-Control-Zones-v11-Hotfix.patch
+      - name: Add universal KH labels and reliable zone layering
+        run: git apply MelonMix-KH-Universal-Controls-v12.patch
+      - name: Add the KH default preset and scene-aware controls
+        run: |
+          # Apply the Android/UI portion normally. The 1.0.2 release changed nearby
+          # native lines and the plugin core is a submodule, so those tiny additions
+          # are inserted below using stable declarations instead of line numbers.
+          git apply \
+            --exclude=app/src/main/cpp/MelonInstance.cpp \
+            --exclude=app/src/main/cpp/MelonInstance.h \
+            --exclude=melonDS-android-lib/src/plugins/Plugin.h \
+            --exclude=melonDS-android-lib/src/plugins/PluginKingdomHeartsDays.h \
+            --exclude=melonDS-android-lib/src/plugins/PluginKingdomHeartsReCoded.h \
+            MelonMix-KH-Default-and-Scene-Controls-v13.patch
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def insert_after(path, anchor, addition):
+              file = Path(path)
+              text = file.read_text()
+              if addition.strip() in text:
+                  return
+              if anchor not in text:
+                  raise SystemExit(f"Scene-control anchor missing in {path}: {anchor!r}")
+              file.write_text(text.replace(anchor, anchor + addition, 1))
+
+          insert_after(
+              "app/src/main/cpp/MelonInstance.cpp",
+              "        plugin->buildShapes();\n",
+              "\n        const bool hideSceneControls = plugin->shouldHideNonessentialTouchControls();\n"
+              "        if (hideSceneControls != khSceneControlsHidden)\n"
+              "        {\n"
+              "            khSceneControlsHidden = hideSceneControls;\n"
+              "            int32_t hidden = hideSceneControls ? 1 : 0;\n"
+              "            fireEmulatorEvent(AndroidMelonEventMessenger::EVENT_KH_SCENE_CONTROLS, sizeof(hidden), &hidden);\n"
+              "        }\n",
+          )
+          insert_after(
+              "app/src/main/cpp/MelonInstance.h",
+              "    bool khPauseMenuShown = false;\n",
+              "    bool khSceneControlsHidden = false;\n",
+          )
+          insert_after(
+              "melonDS-android-lib/src/plugins/Plugin.h",
+              "    virtual bool isCutsceneGameScene() {return false;};\n",
+              "    virtual bool shouldHideNonessentialTouchControls() { return isCutsceneGameScene(); }\n",
+          )
+          insert_after(
+              "melonDS-android-lib/src/plugins/PluginKingdomHeartsDays.h",
+              "    bool isCutsceneGameScene() override;\n",
+              "    bool shouldHideNonessentialTouchControls() override { return isCutsceneGameScene() || isDialogVisible(); }\n",
+          )
+          insert_after(
+              "melonDS-android-lib/src/plugins/PluginKingdomHeartsReCoded.h",
+              "    bool isCutsceneGameScene() override;\n",
+              "    bool shouldHideNonessentialTouchControls() override { return isCutsceneGameScene() || isDialogVisible(); }\n",
+          )
+          PY
+
+      - name: Add the editable KHDS preset and refined scene fades
+        run: |
+          git apply \
+            --exclude=app/src/main/cpp/MelonInstance.cpp \
+            --exclude=app/src/main/cpp/MelonInstance.h \
+            --exclude=melonDS-android-lib/src/plugins/Plugin.h \
+            --exclude=melonDS-android-lib/src/plugins/PluginKingdomHeartsDays.cpp \
+            --exclude=melonDS-android-lib/src/plugins/PluginKingdomHeartsDays.h \
+            --exclude=melonDS-android-lib/src/plugins/PluginKingdomHeartsReCoded.cpp \
+            --exclude=melonDS-android-lib/src/plugins/PluginKingdomHeartsReCoded.h \
+            MelonMix-KH-Editable-Preset-and-Scene-Fades-v14.patch
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path, old, new):
+              file = Path(path)
+              text = file.read_text()
+              if new in text:
+                  return
+              if old not in text:
+                  raise SystemExit(f"v19 anchor missing in {path}: {old!r}")
+              file.write_text(text.replace(old, new, 1))
+
+          replace_once(
+              "app/src/main/cpp/MelonInstance.h",
+              "    bool khSceneControlsHidden = false;",
+              "    int khTouchControlSceneMode = 0;",
+          )
+          replace_once(
+              "app/src/main/cpp/MelonInstance.cpp",
+              "        const bool hideSceneControls = plugin->shouldHideNonessentialTouchControls();\n"
+              "        if (hideSceneControls != khSceneControlsHidden)\n"
+              "        {\n"
+              "            khSceneControlsHidden = hideSceneControls;\n"
+              "            int32_t hidden = hideSceneControls ? 1 : 0;\n"
+              "            fireEmulatorEvent(AndroidMelonEventMessenger::EVENT_KH_SCENE_CONTROLS, sizeof(hidden), &hidden);\n"
+              "        }",
+              "        const int touchControlSceneMode = plugin->touchControlSceneMode();\n"
+              "        if (touchControlSceneMode != khTouchControlSceneMode)\n"
+              "        {\n"
+              "            khTouchControlSceneMode = touchControlSceneMode;\n"
+              "            int32_t mode = touchControlSceneMode;\n"
+              "            fireEmulatorEvent(AndroidMelonEventMessenger::EVENT_KH_SCENE_CONTROLS, sizeof(mode), &mode);\n"
+              "        }",
+          )
+          replace_once(
+              "melonDS-android-lib/src/plugins/Plugin.h",
+              "    virtual bool shouldHideNonessentialTouchControls() { return isCutsceneGameScene(); }",
+              "    virtual bool shouldHideNonessentialTouchControls() { return isCutsceneGameScene(); }\n"
+              "    virtual int touchControlSceneMode() { return shouldHideNonessentialTouchControls() ? 2 : 0; }",
+          )
+          replace_once(
+              "melonDS-android-lib/src/plugins/PluginKingdomHeartsDays.h",
+              "    bool shouldHideNonessentialTouchControls() override { return isCutsceneGameScene() || isDialogVisible(); }",
+              "    int touchControlSceneMode() override;",
+          )
+          replace_once(
+              "melonDS-android-lib/src/plugins/PluginKingdomHeartsReCoded.h",
+              "    bool shouldHideNonessentialTouchControls() override { return isCutsceneGameScene() || isDialogVisible(); }",
+              "    int touchControlSceneMode() override;",
+          )
+          replace_once(
+              "melonDS-android-lib/src/plugins/PluginKingdomHeartsDays.cpp",
+              "    gameScene_Other\n};",
+              "    gameScene_Other\n};\n\n"
+              "int PluginKingdomHeartsDays::touchControlSceneMode()\n"
+              "{\n"
+              "    if (GameScene == gameScene_InGameWithMap && isCharacterControllable && !isDialogVisible()) return 0;\n"
+              "    if (GameScene == gameScene_InGameMenu || GameScene == gameScene_ConfigMenu) return 1;\n"
+              "    return 2;\n"
+              "}",
+          )
+          replace_once(
+              "melonDS-android-lib/src/plugins/PluginKingdomHeartsReCoded.cpp",
+              "    gameScene_Other                     // 19\n};",
+              "    gameScene_Other                     // 19\n};\n\n"
+              "int PluginKingdomHeartsReCoded::touchControlSceneMode()\n"
+              "{\n"
+              "    const bool gameplay = GameScene == gameScene_InGameWithMap || GameScene == gameScene_InGameOlympusBattle;\n"
+              "    if (gameplay && !isDialogVisible() && !isCutsceneGameScene()) return 0;\n"
+              "    if (GameScene == gameScene_InGameMenu) return 1;\n"
+              "    return 2;\n"
+              "}",
+          )
+          PY
+
+      - name: Give v19 its own app identity
+        run: sed -i 's/applicationIdSuffix = ".dev"/applicationIdSuffix = ".remixkh"/' app/build.gradle.kts
+
+      - name: Bake the KHDS Touch Remix APK
+        run: |
+          chmod +x gradlew
+          ./gradlew :app:assembleGitHubProdDebug --stacktrace
+
+      - name: Package the APK for download
+        uses: actions/upload-artifact@v4
+        with:
+          name: MelonMix-KH-Touch-v14-Editable-Remix
+          path: app/build/outputs/apk/gitHubProd/debug/*.apk
+          if-no-files-found: error
+          retention-days: 7
