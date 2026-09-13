@@ -1,0 +1,132 @@
+diff --git a/app/src/main/java/me/magnum/melonds/ui/layouteditor/LayoutEditorActivity.kt b/app/src/main/java/me/magnum/melonds/ui/layouteditor/LayoutEditorActivity.kt
+index 8817e58..48c7739 100644
+--- a/app/src/main/java/me/magnum/melonds/ui/layouteditor/LayoutEditorActivity.kt
++++ b/app/src/main/java/me/magnum/melonds/ui/layouteditor/LayoutEditorActivity.kt
+@@ -51,6 +51,7 @@ class LayoutEditorActivity : AppCompatActivity() {
+     enum class MenuOption(@field:StringRes val stringRes: Int) {
+         PROPERTIES(R.string.properties),
+         BACKGROUNDS(R.string.background),
++        SNAP_TO_GRID(R.string.snap_to_grid),
+         REVERT(R.string.revert_changes),
+         RESET(R.string.reset_default),
+         SAVE_AND_EXIT(R.string.save_and_exit),
+@@ -337,4 +338,4 @@ class LayoutEditorActivity : AppCompatActivity() {
+             picasso.cancelRequest(it)
+         }
+     }
+-}
+\ No newline at end of file
++}
+diff --git a/app/src/main/java/me/magnum/melonds/ui/layouteditor/LayoutEditorManagerView.kt b/app/src/main/java/me/magnum/melonds/ui/layouteditor/LayoutEditorManagerView.kt
+index 8cb35d1..13bba3b 100644
+--- a/app/src/main/java/me/magnum/melonds/ui/layouteditor/LayoutEditorManagerView.kt
++++ b/app/src/main/java/me/magnum/melonds/ui/layouteditor/LayoutEditorManagerView.kt
+@@ -446,6 +446,14 @@ class LayoutEditorManagerView(
+         when (option) {
+             MenuOption.PROPERTIES -> openPropertiesDialog()
+             MenuOption.BACKGROUNDS -> openBackgroundsConfigDialog()
++            MenuOption.SNAP_TO_GRID -> {
++                val enabled = binding.viewLayoutEditor.toggleGridSnapping()
++                Toast.makeText(
++                    context,
++                    if (enabled) R.string.grid_snapping_enabled else R.string.grid_snapping_disabled,
++                    Toast.LENGTH_SHORT,
++                ).show()
++            }
+             MenuOption.REVERT -> viewModel.revertLayoutChanges()
+             MenuOption.RESET -> viewModel.resetLayout()
+             MenuOption.SAVE_AND_EXIT -> {
+@@ -694,4 +702,4 @@ class LayoutEditorManagerView(
+         dialog.show()
+         return dialog
+     }
+-}
+\ No newline at end of file
++}
+diff --git a/app/src/main/java/me/magnum/melonds/ui/layouteditor/LayoutEditorView.kt b/app/src/main/java/me/magnum/melonds/ui/layouteditor/LayoutEditorView.kt
+index c70cf79..e29f4e1 100644
+--- a/app/src/main/java/me/magnum/melonds/ui/layouteditor/LayoutEditorView.kt
++++ b/app/src/main/java/me/magnum/melonds/ui/layouteditor/LayoutEditorView.kt
+@@ -37,9 +37,11 @@ class LayoutEditorView(context: Context, attrs: AttributeSet?) : LayoutView(cont
+     private var otherClickListener: OnClickListener? = null
+     private val defaultComponentWidth by lazy { context.dpToPixels(100f).toInt() }
+     private val minComponentSize by lazy { context.dpToPixels(30f).toInt() }
++    private val gridSize by lazy { context.dpToPixels(8f).roundToInt().coerceAtLeast(1) }
+     private var selectedView: LayoutComponentView? = null
+     private var selectedViewAnchor = Anchor.TOP_LEFT
+     private var modifiedByUser = false
++    private var gridSnappingEnabled = false
+ 
+     init {
+         super.setOnClickListener {
+@@ -76,6 +78,11 @@ class LayoutEditorView(context: Context, attrs: AttributeSet?) : LayoutView(cont
+         return modifiedByUser
+     }
+ 
++    fun toggleGridSnapping(): Boolean {
++        gridSnappingEnabled = !gridSnappingEnabled
++        return gridSnappingEnabled
++    }
++
+     fun buildCurrentLayout(): List<PositionedLayoutComponent> {
+         return views.values.map {
+             PositionedLayoutComponent(it.getRect(), it.component, it.baseAlpha, it.onTop)
+@@ -203,7 +210,9 @@ class LayoutEditorView(context: Context, attrs: AttributeSet?) : LayoutView(cont
+         val currentPosition = view.getPosition()
+         val finalX = min(max(currentPosition.x + offsetX, 0f), width - view.getWidth().toFloat())
+         val finalY = min(max(currentPosition.y + offsetY, 0f), height - view.getHeight().toFloat())
+-        view.setPosition(Point(finalX.toInt(), finalY.toInt()))
++        val positionX = if (gridSnappingEnabled) snapToGrid(finalX.toInt(), width - view.getWidth()) else finalX.toInt()
++        val positionY = if (gridSnappingEnabled) snapToGrid(finalY.toInt(), height - view.getHeight()) else finalY.toInt()
++        view.setPosition(Point(positionX, positionY))
+         modifiedByUser = true
+     }
+ 
+@@ -271,8 +280,12 @@ class LayoutEditorView(context: Context, attrs: AttributeSet?) : LayoutView(cont
+     fun scaleSelectedView(widthScale: Float, heightScale: Float) {
+         val currentlySelectedView = selectedView ?: return
+ 
+-        val newViewWidth = ((width - minComponentSize) * widthScale + minComponentSize).roundToInt()
+-        val newViewHeight = ((height - minComponentSize) * heightScale + minComponentSize).roundToInt()
++        var newViewWidth = ((width - minComponentSize) * widthScale + minComponentSize).roundToInt()
++        var newViewHeight = ((height - minComponentSize) * heightScale + minComponentSize).roundToInt()
++        if (gridSnappingEnabled && !currentlySelectedView.component.isScreen()) {
++            newViewWidth = snapToGrid(newViewWidth, width).coerceAtLeast(minComponentSize)
++            newViewHeight = snapToGrid(newViewHeight, height).coerceAtLeast(minComponentSize)
++        }
+ 
+         val viewPosition = currentlySelectedView.getPosition()
+         var viewX: Int
+@@ -315,7 +328,16 @@ class LayoutEditorView(context: Context, attrs: AttributeSet?) : LayoutView(cont
+                 viewY = 0
+             }
+         }
++        if (gridSnappingEnabled && !currentlySelectedView.component.isScreen()) {
++            viewX = snapToGrid(viewX, width - newViewWidth)
++            viewY = snapToGrid(viewY, height - newViewHeight)
++        }
+         currentlySelectedView.setPositionAndSize(Point(viewX, viewY), newViewWidth, newViewHeight)
+         modifiedByUser = true
+     }
+-}
+\ No newline at end of file
++
++    private fun snapToGrid(value: Int, maximum: Int): Int {
++        val snapped = ((value.toFloat() / gridSize).roundToInt() * gridSize)
++        return snapped.coerceIn(0, maximum.coerceAtLeast(0))
++    }
++}
+diff --git a/app/src/main/res/values/strings.xml b/app/src/main/res/values/strings.xml
+index cbbeed7..d8643f6 100644
+--- a/app/src/main/res/values/strings.xml
++++ b/app/src/main/res/values/strings.xml
+@@ -399,6 +399,9 @@
+     <string name="input_l_shortcut_toggle">KH: Shortcut Toggle</string>
+     <string name="input_movement_stick">KH: Movement Stick</string>
+     <string name="input_kh_command_pad">KH: Command Pad</string>
++    <string name="snap_to_grid">Toggle grid snapping</string>
++    <string name="grid_snapping_enabled">Grid snapping enabled</string>
++    <string name="grid_snapping_disabled">Grid snapping disabled</string>
+     <string name="kh_camera_sensitivity">KH camera sensitivity</string>
+ 
+     <string name="layouts">Layouts</string>
