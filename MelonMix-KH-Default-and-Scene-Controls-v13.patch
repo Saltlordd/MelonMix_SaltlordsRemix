@@ -1,0 +1,337 @@
+From 6b2853c26847dc0582ef87282d111ef08ef5e7aa Mon Sep 17 00:00:00 2001
+From: Codex <codex@local>
+Date: Sun, 13 Sep 2026 16:41:43 +0000
+Subject: [PATCH] Add KH default layout and scene-aware controls
+
+---
+ app/src/main/cpp/AndroidMelonEventMessenger.h |  1 +
+ app/src/main/cpp/MelonInstance.cpp            | 10 +++-
+ app/src/main/cpp/MelonInstance.h              |  1 +
+ .../domain/model/emulator/EmulatorEvent.kt    |  3 +-
+ .../impl/emulator/AndroidEmulatorManager.kt   |  4 +-
+ .../impl/emulator/EmulatorEventType.kt        |  1 +
+ .../impl/layout/DefaultLayoutProvider.kt      | 58 ++++++++++++++++++-
+ .../melonds/impl/layout/UILayoutProvider.kt   |  6 +-
+ .../melonds/ui/emulator/EmulatorActivity.kt   |  4 ++
+ .../melonds/ui/emulator/EmulatorViewModel.kt  |  5 ++
+ .../melonds/ui/emulator/RuntimeLayoutView.kt  | 16 +++++
+ melonDS-android-lib/src/plugins/Plugin.h      |  1 +
+ .../src/plugins/PluginKingdomHeartsDays.h     |  1 +
+ .../src/plugins/PluginKingdomHeartsReCoded.h  |  1 +
+ 14 files changed, 107 insertions(+), 5 deletions(-)
+
+diff --git a/app/src/main/cpp/AndroidMelonEventMessenger.h b/app/src/main/cpp/AndroidMelonEventMessenger.h
+index 70c0b24..5c5abe5 100644
+--- a/app/src/main/cpp/AndroidMelonEventMessenger.h
++++ b/app/src/main/cpp/AndroidMelonEventMessenger.h
+@@ -19,6 +19,7 @@ public:
+     static constexpr int EVENT_KH_PAUSE_MENU = 300;
+     static constexpr int EVENT_KH_MENU_SOUND = 301;
+     static constexpr int EVENT_KH_CUTSCENE = 302;
++    static constexpr int EVENT_KH_SCENE_CONTROLS = 303;
+ 
+     void onRumbleStart(int durationMs) override;
+     void onRumbleStop() override;
+diff --git a/app/src/main/cpp/MelonInstance.cpp b/app/src/main/cpp/MelonInstance.cpp
+index 68178ed..3717c50 100644
+--- a/app/src/main/cpp/MelonInstance.cpp
++++ b/app/src/main/cpp/MelonInstance.cpp
+@@ -439,6 +439,14 @@ u32 MelonInstance::runFrame()
+         plugin->refreshGameScene();
+         plugin->buildShapes();
+ 
++        const bool hideSceneControls = plugin->shouldHideNonessentialTouchControls();
++        if (hideSceneControls != khSceneControlsHidden)
++        {
++            khSceneControlsHidden = hideSceneControls;
++            int32_t hidden = hideSceneControls ? 1 : 0;
++            fireEmulatorEvent(AndroidMelonEventMessenger::EVENT_KH_SCENE_CONTROLS, sizeof(hidden), &hidden);
++        }
++
+         // [KHMM] Per-frame plugin input processing, in desktop order (EmuThread.cpp:324-336):
+         // camera touch-key mask first, then the hotkey hook, then the KH addon keys, then
+         // the filtered mask reaches the DS. Runs on a COPY of inputMask so the raw user
+@@ -1296,4 +1304,4 @@ void MelonInstance::saveRewindState(RewindSaveState* rewindSaveState)
+     delete savestate;
+ }
+ 
+-}
+\ No newline at end of file
++}
+diff --git a/app/src/main/cpp/MelonInstance.h b/app/src/main/cpp/MelonInstance.h
+index 59a90ae..4e7d816 100644
+--- a/app/src/main/cpp/MelonInstance.h
++++ b/app/src/main/cpp/MelonInstance.h
+@@ -147,6 +147,7 @@ private:
+     // [KHMM] whether the frontend pause-menu overlay is currently shown (last snapshot sent);
+     // used to retract it when enhanced graphics is toggled off mid-menu
+     bool khPauseMenuShown = false;
++    bool khSceneControlsHidden = false;
+     // [KHMM] target display aspect ratio pushed into the plugin each frame (single-screen
+     // presentation). Set from the real on-screen top-screen viewport by the frontend
+     // (EmulatorActivity.updateRendererScreenAreas -> JNI); written on the UI thread, read
+diff --git a/app/src/main/java/me/magnum/melonds/domain/model/emulator/EmulatorEvent.kt b/app/src/main/java/me/magnum/melonds/domain/model/emulator/EmulatorEvent.kt
+index bdf146f..2ba81f7 100644
+--- a/app/src/main/java/me/magnum/melonds/domain/model/emulator/EmulatorEvent.kt
++++ b/app/src/main/java/me/magnum/melonds/domain/model/emulator/EmulatorEvent.kt
+@@ -9,6 +9,7 @@ sealed class EmulatorEvent {
+     data class KhCutscene(val state: KhCutsceneState?) : EmulatorEvent()
+     // [KHMM] KH cutscene skip menu sound (1=enter, 2=move, 3=continue, 4=select)
+     data class KhMenuSound(val soundId: Int) : EmulatorEvent()
++    data class KhSceneControls(val hidden: Boolean) : EmulatorEvent()
+     data class Stop(val reason: Reason) : EmulatorEvent() {
+         enum class Reason {
+             GBAModeNotSupported,
+@@ -16,4 +17,4 @@ sealed class EmulatorEvent {
+             PowerOff,
+         }
+     }
+-}
+\ No newline at end of file
++}
+diff --git a/app/src/main/java/me/magnum/melonds/impl/emulator/AndroidEmulatorManager.kt b/app/src/main/java/me/magnum/melonds/impl/emulator/AndroidEmulatorManager.kt
+index 67f91f4..5cfd8ca 100644
+--- a/app/src/main/java/me/magnum/melonds/impl/emulator/AndroidEmulatorManager.kt
++++ b/app/src/main/java/me/magnum/melonds/impl/emulator/AndroidEmulatorManager.kt
+@@ -123,6 +123,8 @@ class AndroidEmulatorManager(
+                 }
+                 _emulatorEvents.tryEmit(EmulatorEvent.KhCutscene(state))
+             }
++            EmulatorEventType.EventKhSceneControls ->
++                _emulatorEvents.tryEmit(EmulatorEvent.KhSceneControls(data.getInt() != 0))
+         }
+     }
+ 
+@@ -349,4 +351,4 @@ class AndroidEmulatorManager(
+         private const val BadExceptionRegion = 3
+         private const val PowerOff = 4
+     }
+-}
+\ No newline at end of file
++}
+diff --git a/app/src/main/java/me/magnum/melonds/impl/emulator/EmulatorEventType.kt b/app/src/main/java/me/magnum/melonds/impl/emulator/EmulatorEventType.kt
+index fb63ca6..2e6e3c3 100644
+--- a/app/src/main/java/me/magnum/melonds/impl/emulator/EmulatorEventType.kt
++++ b/app/src/main/java/me/magnum/melonds/impl/emulator/EmulatorEventType.kt
+@@ -105,4 +105,5 @@ enum class EmulatorEventType(val event: Int) {
+      * * subtitles file path (`str`, only when playing != 0; may be empty/nonexistent)
+      */
+     EventKhCutscene(302),
++    EventKhSceneControls(303),
+ }
+diff --git a/app/src/main/java/me/magnum/melonds/impl/layout/DefaultLayoutProvider.kt b/app/src/main/java/me/magnum/melonds/impl/layout/DefaultLayoutProvider.kt
+index 58f6712..38d3334 100644
+--- a/app/src/main/java/me/magnum/melonds/impl/layout/DefaultLayoutProvider.kt
++++ b/app/src/main/java/me/magnum/melonds/impl/layout/DefaultLayoutProvider.kt
+@@ -27,6 +27,62 @@ class DefaultLayoutProvider(
+     private val screenUnitsConverter: ScreenUnitsConverter,
+ ) {
+ 
++    /** KH-first controls used by the built-in layout in single-screen mode. */
++    fun buildKhDefaultLayout(variant: UILayoutVariant): UILayout {
++        val base = buildDefaultLayout(variant)
++        val width = variant.uiSize.x
++        val height = variant.uiSize.y
++        val left = variant.uiInsets.left
++        val top = variant.uiInsets.top
++        val safeWidth = width - left - variant.uiInsets.right
++        val safeHeight = height - top - variant.uiInsets.bottom
++        fun rect(x: Float, y: Float, w: Float, h: Float) = Rect(
++            left + (safeWidth * x).roundToInt(), top + (safeHeight * y).roundToInt(),
++            (safeWidth * w).roundToInt(), (safeHeight * h).roundToInt(),
++        )
++
++        val portrait = height > width
++        val controls = if (!portrait) {
++            listOf(
++                PositionedLayoutComponent(rect(0.00f, 0.42f, 0.42f, 0.48f), LayoutComponent.MOVEMENT_STICK, 0.16f),
++                PositionedLayoutComponent(rect(0.50f, 0.42f, 0.50f, 0.48f), LayoutComponent.KH_CAMERA_SWIPE_ZONE, 0.16f),
++                PositionedLayoutComponent(rect(0.04f, 0.42f, 0.16f, 0.16f), LayoutComponent.KH_COMMAND_PAD, 0.55f),
++                PositionedLayoutComponent(rect(0.08f, 0.59f, 0.075f, 0.085f), LayoutComponent.BUTTON_L_SHORTCUT_TOGGLE, 0.75f),
++                PositionedLayoutComponent(rect(0.81f, 0.40f, 0.075f, 0.085f), LayoutComponent.BUTTON_KH_GUARD, 0.75f),
++                PositionedLayoutComponent(rect(0.90f, 0.40f, 0.075f, 0.085f), LayoutComponent.BUTTON_KH_X, 0.75f),
++                PositionedLayoutComponent(rect(0.72f, 0.52f, 0.075f, 0.085f), LayoutComponent.BUTTON_KH_JUMP, 0.75f),
++                PositionedLayoutComponent(rect(0.84f, 0.50f, 0.11f, 0.13f), LayoutComponent.BUTTON_KH_ATTACK, 0.75f),
++                PositionedLayoutComponent(rect(0.91f, 0.65f, 0.075f, 0.085f), LayoutComponent.BUTTON_KH_LOCK_ON, 0.75f),
++                PositionedLayoutComponent(rect(0.935f, 0.025f, 0.055f, 0.065f), LayoutComponent.BUTTON_KH_TOGGLE_CONTROLS, 0.85f),
++                PositionedLayoutComponent(rect(0.015f, 0.92f, 0.055f, 0.065f), LayoutComponent.BUTTON_FAST_FORWARD_TOGGLE, 0.60f),
++                PositionedLayoutComponent(rect(0.74f, 0.92f, 0.055f, 0.065f), LayoutComponent.BUTTON_L, 0.60f),
++                PositionedLayoutComponent(rect(0.81f, 0.92f, 0.055f, 0.065f), LayoutComponent.BUTTON_R, 0.60f),
++                PositionedLayoutComponent(rect(0.89f, 0.92f, 0.045f, 0.055f), LayoutComponent.BUTTON_SELECT, 0.60f),
++                PositionedLayoutComponent(rect(0.95f, 0.92f, 0.045f, 0.055f), LayoutComponent.BUTTON_START, 0.60f),
++            )
++        } else {
++            listOf(
++                PositionedLayoutComponent(rect(0.00f, 0.48f, 0.50f, 0.40f), LayoutComponent.MOVEMENT_STICK, 0.16f),
++                PositionedLayoutComponent(rect(0.50f, 0.48f, 0.50f, 0.40f), LayoutComponent.KH_CAMERA_SWIPE_ZONE, 0.16f),
++                PositionedLayoutComponent(rect(0.04f, 0.58f, 0.23f, 0.13f), LayoutComponent.KH_COMMAND_PAD, 0.55f),
++                PositionedLayoutComponent(rect(0.08f, 0.73f, 0.12f, 0.065f), LayoutComponent.BUTTON_L_SHORTCUT_TOGGLE, 0.75f),
++                PositionedLayoutComponent(rect(0.72f, 0.57f, 0.12f, 0.065f), LayoutComponent.BUTTON_KH_GUARD, 0.75f),
++                PositionedLayoutComponent(rect(0.86f, 0.57f, 0.12f, 0.065f), LayoutComponent.BUTTON_KH_X, 0.75f),
++                PositionedLayoutComponent(rect(0.64f, 0.68f, 0.12f, 0.065f), LayoutComponent.BUTTON_KH_JUMP, 0.75f),
++                PositionedLayoutComponent(rect(0.78f, 0.66f, 0.18f, 0.10f), LayoutComponent.BUTTON_KH_ATTACK, 0.75f),
++                PositionedLayoutComponent(rect(0.86f, 0.79f, 0.12f, 0.065f), LayoutComponent.BUTTON_KH_LOCK_ON, 0.75f),
++                PositionedLayoutComponent(rect(0.90f, 0.02f, 0.085f, 0.05f), LayoutComponent.BUTTON_KH_TOGGLE_CONTROLS, 0.85f),
++                PositionedLayoutComponent(rect(0.02f, 0.93f, 0.085f, 0.05f), LayoutComponent.BUTTON_FAST_FORWARD_TOGGLE, 0.60f),
++                PositionedLayoutComponent(rect(0.63f, 0.93f, 0.085f, 0.05f), LayoutComponent.BUTTON_L, 0.60f),
++                PositionedLayoutComponent(rect(0.73f, 0.93f, 0.085f, 0.05f), LayoutComponent.BUTTON_R, 0.60f),
++                PositionedLayoutComponent(rect(0.83f, 0.93f, 0.075f, 0.05f), LayoutComponent.BUTTON_SELECT, 0.60f),
++                PositionedLayoutComponent(rect(0.92f, 0.93f, 0.075f, 0.05f), LayoutComponent.BUTTON_START, 0.60f),
++            )
++        }
++        val screens = base.mainScreenLayout.components.orEmpty().filter { it.isScreen() }
++        return base.copy(mainScreenLayout = base.mainScreenLayout.copy(components = screens + controls))
++    }
++
+     fun buildDefaultLayout(variant: UILayoutVariant): UILayout {
+         val width = variant.uiSize.x
+         val height = variant.uiSize.y
+@@ -381,4 +437,4 @@ class DefaultLayoutProvider(
+             Insets(displayCutout.safeInsetLeft, displayCutout.safeInsetTop, displayCutout.safeInsetRight, displayCutout.safeInsetBottom)
+         }
+     }
+-}
+\ No newline at end of file
++}
+diff --git a/app/src/main/java/me/magnum/melonds/impl/layout/UILayoutProvider.kt b/app/src/main/java/me/magnum/melonds/impl/layout/UILayoutProvider.kt
+index 47c06fc..64ae52f 100644
+--- a/app/src/main/java/me/magnum/melonds/impl/layout/UILayoutProvider.kt
++++ b/app/src/main/java/me/magnum/melonds/impl/layout/UILayoutProvider.kt
+@@ -48,7 +48,11 @@ class UILayoutProvider(private val defaultLayoutProvider: DefaultLayoutProvider)
+         if (layoutConfiguration == null || variant == null) {
+             null
+         } else {
+-            val layout = getOptimalLayoutForVariant(layoutConfiguration, variant)
++            val layout = if (topScreenOnly && layoutConfiguration.type == LayoutConfiguration.LayoutType.DEFAULT) {
++                defaultLayoutProvider.buildKhDefaultLayout(variant)
++            } else {
++                getOptimalLayoutForVariant(layoutConfiguration, variant)
++            }
+             variant to if (topScreenOnly) buildKhTopScreenOnlyLayout(layout, variant) else layout
+         }
+     }
+diff --git a/app/src/main/java/me/magnum/melonds/ui/emulator/EmulatorActivity.kt b/app/src/main/java/me/magnum/melonds/ui/emulator/EmulatorActivity.kt
+index d0882a7..b665263 100644
+--- a/app/src/main/java/me/magnum/melonds/ui/emulator/EmulatorActivity.kt
++++ b/app/src/main/java/me/magnum/melonds/ui/emulator/EmulatorActivity.kt
+@@ -383,6 +383,10 @@ class EmulatorActivity : AppCompatActivity() {
+                 // the skip menu is open (desktop: windowPauseVideo/windowUnpauseVideo) and
+                 // while the emulator core is paused (app pause menu, save-state wraps).
+                 val khCutsceneState = viewModel.khCutscene.collectAsState()
++                val khSceneControlsHidden = viewModel.khSceneControlsHidden.collectAsState()
++                LaunchedEffect(khSceneControlsHidden.value) {
++                    binding.viewLayoutControls.setKhSceneControlsHidden(khSceneControlsHidden.value)
++                }
+                 val khEmulatorPaused = viewModel.emulatorPaused.collectAsState()
+                 KhCutscenePlayerUi(
+                     state = khCutsceneState.value,
+diff --git a/app/src/main/java/me/magnum/melonds/ui/emulator/EmulatorViewModel.kt b/app/src/main/java/me/magnum/melonds/ui/emulator/EmulatorViewModel.kt
+index 33b9f0c..bac8c1e 100644
+--- a/app/src/main/java/me/magnum/melonds/ui/emulator/EmulatorViewModel.kt
++++ b/app/src/main/java/me/magnum/melonds/ui/emulator/EmulatorViewModel.kt
+@@ -162,6 +162,9 @@ class EmulatorViewModel @Inject constructor(
+     private val _khCutscene = MutableStateFlow<KhCutsceneState?>(null)
+     val khCutscene = _khCutscene.asStateFlow()
+ 
++    private val _khSceneControlsHidden = MutableStateFlow(false)
++    val khSceneControlsHidden = _khSceneControlsHidden.asStateFlow()
++
+     // [KHMM] cutscene skip menu sounds (1=enter, 2=move, 3=continue, 4=select). Small buffer:
+     // sounds can burst faster than the collector resumes (menu ticks every 8ms while parked)
+     private val _khMenuSoundEvent = MutableSharedFlow<Int>(extraBufferCapacity = 8, onBufferOverflow = BufferOverflow.DROP_OLDEST)
+@@ -787,6 +790,7 @@ class EmulatorViewModel @Inject constructor(
+                     }
+                     // [KHMM] cutscene skip menu SFX
+                     is EmulatorEvent.KhMenuSound -> _khMenuSoundEvent.tryEmit(it.soundId)
++                    is EmulatorEvent.KhSceneControls -> _khSceneControlsHidden.value = it.hidden
+                     is EmulatorEvent.Stop -> {
+                         when (it.reason) {
+                             EmulatorEvent.Stop.Reason.GBAModeNotSupported -> _toastEvent.tryEmit(ToastEvent.GbaModeNotSupported)
+@@ -795,6 +799,7 @@ class EmulatorViewModel @Inject constructor(
+                         }
+                         _khPauseMenu.value = null // [KHMM]
+                         _khCutscene.value = null // [KHMM]
++                        _khSceneControlsHidden.value = false
+                         stopEmulatorAndExit()
+                     }
+                 }
+diff --git a/app/src/main/java/me/magnum/melonds/ui/emulator/RuntimeLayoutView.kt b/app/src/main/java/me/magnum/melonds/ui/emulator/RuntimeLayoutView.kt
+index f480dbf..fcfc6a6 100644
+--- a/app/src/main/java/me/magnum/melonds/ui/emulator/RuntimeLayoutView.kt
++++ b/app/src/main/java/me/magnum/melonds/ui/emulator/RuntimeLayoutView.kt
+@@ -43,6 +43,7 @@ class RuntimeLayoutView(context: Context, attrs: AttributeSet? = null) : LayoutV
+     private var isSoftInputVisible = true
+     private var areScreensSwapped = false
+     private var connectedControllersState: ConnectedControllersState = ConnectedControllersState.NoControllers
++    private var khSceneControlsHidden = false
+     private val autoHideHandler = Handler(Looper.getMainLooper())
+     private val autoHideRunnable = Runnable { fadeSoftInputs() }
+ 
+@@ -61,6 +62,12 @@ class RuntimeLayoutView(context: Context, attrs: AttributeSet? = null) : LayoutV
+         updateVisibility()
+     }
+ 
++    fun setKhSceneControlsHidden(hidden: Boolean) {
++        if (khSceneControlsHidden == hidden) return
++        khSceneControlsHidden = hidden
++        updateVisibility()
++    }
++
+     fun toggleSoftInputVisibility() {
+         isSoftInputVisible = !isSoftInputVisible
+         setLayoutComponentToggleState(LayoutComponent.BUTTON_TOGGLE_SOFT_INPUT, isSoftInputVisible)
+@@ -254,6 +261,15 @@ class RuntimeLayoutView(context: Context, attrs: AttributeSet? = null) : LayoutV
+             hiddenComponents = LayoutComponent.entries.toList().filterNot { it in controlToggles }
+         }
+ 
++        if (khSceneControlsHidden) {
++            hiddenComponents = (hiddenComponents + listOf(
++                LayoutComponent.BUTTON_KH_X,
++                LayoutComponent.BUTTON_KH_GUARD,
++                LayoutComponent.BUTTON_KH_LOCK_ON,
++                LayoutComponent.BUTTON_L_SHORTCUT_TOGGLE,
++            )).distinct()
++        }
++
+         val visibleComponents = LayoutComponent.entries.filter { !hiddenComponents.contains(it) }
+ 
+         hiddenComponents.forEach { component ->
+diff --git a/melonDS-android-lib/src/plugins/Plugin.h b/melonDS-android-lib/src/plugins/Plugin.h
+index fbe9f57..ded8ed2 100644
+--- a/melonDS-android-lib/src/plugins/Plugin.h
++++ b/melonDS-android-lib/src/plugins/Plugin.h
+@@ -289,6 +289,7 @@ public:
+     virtual bool isMobiCutsceneGameScene() {return false;};
+     virtual bool isInEngineCutsceneGameScene() {return false;};
+     virtual bool isCutsceneGameScene() {return false;};
++    virtual bool shouldHideNonessentialTouchControls() { return isCutsceneGameScene(); }
+     virtual bool didMobiCutsceneEnded() {return !isCutsceneGameScene();};
+     virtual bool didInEngineCutsceneEnded() {return !isCutsceneGameScene();};
+     virtual bool canReturnToGameAfterReplacementCutscene() {return true;};
+diff --git a/melonDS-android-lib/src/plugins/PluginKingdomHeartsDays.h b/melonDS-android-lib/src/plugins/PluginKingdomHeartsDays.h
+index 1707d42..a6adaf9 100644
+--- a/melonDS-android-lib/src/plugins/PluginKingdomHeartsDays.h
++++ b/melonDS-android-lib/src/plugins/PluginKingdomHeartsDays.h
+@@ -176,6 +176,7 @@ private:
+     bool isMobiCutsceneGameScene() override;
+     bool isInEngineCutsceneGameScene() override;
+     bool isCutsceneGameScene() override;
++    bool shouldHideNonessentialTouchControls() override { return isCutsceneGameScene() || isDialogVisible(); }
+     bool didMobiCutsceneEnded() override;
+     bool didInEngineCutsceneEnded() override;
+     bool canReturnToGameAfterReplacementCutscene() override;
+diff --git a/melonDS-android-lib/src/plugins/PluginKingdomHeartsReCoded.h b/melonDS-android-lib/src/plugins/PluginKingdomHeartsReCoded.h
+index 0694f23..24f521a 100644
+--- a/melonDS-android-lib/src/plugins/PluginKingdomHeartsReCoded.h
++++ b/melonDS-android-lib/src/plugins/PluginKingdomHeartsReCoded.h
+@@ -145,6 +145,7 @@ private:
+     bool isMobiCutsceneGameScene() override;
+     bool isInEngineCutsceneGameScene() override;
+     bool isCutsceneGameScene() override;
++    bool shouldHideNonessentialTouchControls() override { return isCutsceneGameScene() || isDialogVisible(); }
+     bool didMobiCutsceneEnded() override;
+     bool didInEngineCutsceneEnded() override;
+     bool canReturnToGameAfterReplacementCutscene() override;
+-- 
+2.51.1
+
