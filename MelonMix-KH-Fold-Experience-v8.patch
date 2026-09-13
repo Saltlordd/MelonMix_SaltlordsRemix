@@ -1,0 +1,276 @@
+diff --git a/app/src/main/java/me/magnum/melonds/impl/layout/UILayoutProvider.kt b/app/src/main/java/me/magnum/melonds/impl/layout/UILayoutProvider.kt
+index 2a966cf..47c06fc 100644
+--- a/app/src/main/java/me/magnum/melonds/impl/layout/UILayoutProvider.kt
++++ b/app/src/main/java/me/magnum/melonds/impl/layout/UILayoutProvider.kt
+@@ -69,7 +69,18 @@ class UILayoutProvider(private val defaultLayoutProvider: DefaultLayoutProvider)
+             val boxHeight = (uiWidth * 9f / 16f).toInt()
+             Rect(0, (uiHeight - boxHeight) / 2, uiWidth, boxHeight)
+         } else {
+-            Rect(0, 0, uiWidth, uiHeight)
++            // [KH touch] The unfolded Fold display is squarer than the DS UI's 4:3
++            // canvas. Asking the KH compositor for that near-square ratio crops the
++            // authored left/right edges of dialogue, save and config screens. Keep the
++            // physical aspect on 4:3-and-wider displays, but fit a centred 4:3 viewport
++            // on squarer landscape displays. Controls still use the full window.
++            val minimumAspect = 4f / 3f
++            if (uiWidth.toFloat() / uiHeight >= minimumAspect) {
++                Rect(0, 0, uiWidth, uiHeight)
++            } else {
++                val boxHeight = (uiWidth / minimumAspect).toInt()
++                Rect(0, (uiHeight - boxHeight) / 2, uiWidth, boxHeight)
++            }
+         }
+ 
+         val components = baseLayout.mainScreenLayout.components.orEmpty()
+@@ -274,4 +285,4 @@ class UILayoutProvider(private val defaultLayoutProvider: DefaultLayoutProvider)
+         val boundsHeight = maxY - minY
+         return Rect(minX, minY, boundsWidth, boundsHeight)
+     }
+-}
+\ No newline at end of file
++}
+diff --git a/app/src/main/java/me/magnum/melonds/ui/emulator/EmulatorActivity.kt b/app/src/main/java/me/magnum/melonds/ui/emulator/EmulatorActivity.kt
+index fdabdac..d0882a7 100644
+--- a/app/src/main/java/me/magnum/melonds/ui/emulator/EmulatorActivity.kt
++++ b/app/src/main/java/me/magnum/melonds/ui/emulator/EmulatorActivity.kt
+@@ -430,8 +430,14 @@ class EmulatorActivity : AppCompatActivity() {
+                     )
+                 }
+             }
++
+         }
+ 
++        // [KH touch] The Compose layer contains the full-window HD video. Keep the
++        // runtime controls visually above it; transparent space still falls through.
++        binding.viewLayoutControls.bringToFront()
++        binding.textFps.bringToFront()
++
+         lifecycleScope.launch {
+             lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+                 permissionHandler.observePermissionRequests().collect {
+@@ -1097,4 +1103,4 @@ class EmulatorActivity : AppCompatActivity() {
+         }
+         presentation?.dismiss()
+     }
+-}
+\ No newline at end of file
++}
+diff --git a/app/src/main/java/me/magnum/melonds/ui/emulator/RuntimeLayoutView.kt b/app/src/main/java/me/magnum/melonds/ui/emulator/RuntimeLayoutView.kt
+index 4c9da0e..19b0807 100644
+--- a/app/src/main/java/me/magnum/melonds/ui/emulator/RuntimeLayoutView.kt
++++ b/app/src/main/java/me/magnum/melonds/ui/emulator/RuntimeLayoutView.kt
+@@ -1,7 +1,12 @@
+ package me.magnum.melonds.ui.emulator
+ 
+ import android.content.Context
++import android.os.Handler
++import android.os.Looper
+ import android.util.AttributeSet
++import android.view.Gravity
++import android.view.MotionEvent
++import android.view.View
+ import androidx.core.view.isGone
+ import androidx.core.view.isVisible
+ import dagger.hilt.android.AndroidEntryPoint
+@@ -15,6 +20,7 @@ import me.magnum.melonds.ui.emulator.input.DpadInputHandler
+ import me.magnum.melonds.ui.emulator.input.FrontendInputHandler
+ import me.magnum.melonds.ui.emulator.input.IInputListener
+ import me.magnum.melonds.ui.emulator.input.KhCameraStickInputHandler
++import me.magnum.melonds.ui.emulator.input.KhCameraSwipeInputHandler
+ import me.magnum.melonds.ui.emulator.input.KhShortcutToggleInputHandler
+ import me.magnum.melonds.ui.emulator.input.KhMovementStickInputHandler
+ import me.magnum.melonds.ui.emulator.input.KhCommandPadInputHandler
+@@ -38,6 +44,9 @@ class RuntimeLayoutView(context: Context, attrs: AttributeSet? = null) : LayoutV
+     private var isSoftInputVisible = true
+     private var areScreensSwapped = false
+     private var connectedControllersState: ConnectedControllersState = ConnectedControllersState.NoControllers
++    private val autoHideHandler = Handler(Looper.getMainLooper())
++    private val cameraSwipeView = View(context)
++    private val autoHideRunnable = Runnable { fadeSoftInputs() }
+ 
+     fun setFrontendInputHandler(frontendInputHandler: FrontendInputHandler) {
+         this.frontendInputHandler = frontendInputHandler
+@@ -77,9 +86,66 @@ class RuntimeLayoutView(context: Context, attrs: AttributeSet? = null) : LayoutV
+     fun instantiateLayout(runtimeLayout: RuntimeInputLayoutConfiguration, layoutTarget: LayoutTarget) {
+         currentRuntimeLayout = runtimeLayout
+         instantiateLayout(runtimeLayout.layout, layoutTarget)
++        installCameraSwipeZone(layoutTarget)
+         updateInputs()
+         updateVisibility()
+         setLayoutComponentToggleState(LayoutComponent.BUTTON_TOGGLE_SOFT_INPUT, isSoftInputVisible)
++        showSoftInputsAndScheduleHide()
++    }
++
++    override fun dispatchTouchEvent(event: MotionEvent): Boolean {
++        // [KH touch] A hidden control activates on the revealing touch; refreshing the
++        // timer for every event also prevents a fade while a thumb is still moving.
++        showSoftInputsAndScheduleHide()
++        return super.dispatchTouchEvent(event)
++    }
++
++    override fun onDetachedFromWindow() {
++        autoHideHandler.removeCallbacks(autoHideRunnable)
++        MelonEmulator.setKhCameraAxes(0f, 0f)
++        super.onDetachedFromWindow()
++    }
++
++    private fun installCameraSwipeZone(layoutTarget: LayoutTarget) {
++        if (layoutTarget != LayoutTarget.MAIN_SCREEN) return
++        cameraSwipeView.setOnTouchListener(KhCameraSwipeInputHandler())
++        val params = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT).apply {
++            width = 0
++            gravity = Gravity.END
++        }
++        cameraSwipeView.layoutParams = params
++        cameraSwipeView.post {
++            cameraSwipeView.layoutParams = (cameraSwipeView.layoutParams as LayoutParams).apply {
++                width = this@RuntimeLayoutView.width / 2
++            }
++        }
++
++        // Screens were inserted at the bottom and controls above them. Insert the camera
++        // touchpad immediately above the screens so every visible control wins hit-testing.
++        val screenCount = getLayoutComponentViews().count { it.component.isScreen() }
++        addView(cameraSwipeView, screenCount, cameraSwipeView.layoutParams)
++    }
++
++    private fun showSoftInputsAndScheduleHide() {
++        if (!isSoftInputVisible) return
++        autoHideHandler.removeCallbacks(autoHideRunnable)
++        val inputAlpha = (currentRuntimeLayout?.softInputOpacity ?: 100) / 100f
++        getLayoutComponentViews().forEach {
++            if (!it.component.isScreen()) {
++                it.view.animate().cancel()
++                it.view.alpha = inputAlpha
++            }
++        }
++        autoHideHandler.postDelayed(autoHideRunnable, AUTO_HIDE_DELAY_MS)
++    }
++
++    private fun fadeSoftInputs() {
++        if (!isSoftInputVisible) return
++        getLayoutComponentViews().forEach {
++            if (!it.component.isScreen()) {
++                it.view.animate().alpha(0f).setDuration(AUTO_HIDE_FADE_MS).start()
++            }
++        }
+     }
+ 
+     private fun updateInputs() {
+@@ -201,4 +267,9 @@ class RuntimeLayoutView(context: Context, attrs: AttributeSet? = null) : LayoutV
+             }
+         }
+     }
++
++    private companion object {
++        const val AUTO_HIDE_DELAY_MS = 5_000L
++        const val AUTO_HIDE_FADE_MS = 300L
++    }
+ }
+diff --git a/app/src/main/java/me/magnum/melonds/ui/emulator/input/KhCameraSwipeInputHandler.kt b/app/src/main/java/me/magnum/melonds/ui/emulator/input/KhCameraSwipeInputHandler.kt
+new file mode 100644
+index 0000000..8f85e95
+--- /dev/null
++++ b/app/src/main/java/me/magnum/melonds/ui/emulator/input/KhCameraSwipeInputHandler.kt
+@@ -0,0 +1,74 @@
++package me.magnum.melonds.ui.emulator.input
++
++import android.os.Handler
++import android.os.Looper
++import android.view.MotionEvent
++import android.view.View
++import me.magnum.melonds.MelonEmulator
++import kotlin.math.abs
++import kotlin.math.pow
++
++/**
++ * Turns relative drags over an invisible touchpad into short camera-axis pulses.
++ * Relative deltas make every new touch the centre, unlike a fixed virtual stick.
++ */
++class KhCameraSwipeInputHandler : View.OnTouchListener {
++    private val handler = Handler(Looper.getMainLooper())
++    private var pointerId = MotionEvent.INVALID_POINTER_ID
++    private var lastX = 0f
++    private var lastY = 0f
++    private val stopCamera = Runnable { MelonEmulator.setKhCameraAxes(0f, 0f) }
++
++    override fun onTouch(view: View, event: MotionEvent): Boolean {
++        when (event.actionMasked) {
++            MotionEvent.ACTION_DOWN -> {
++                pointerId = event.getPointerId(0)
++                lastX = event.x
++                lastY = event.y
++                stop()
++            }
++            MotionEvent.ACTION_MOVE -> {
++                val index = event.findPointerIndex(pointerId)
++                if (index >= 0) {
++                    val x = event.getX(index)
++                    val y = event.getY(index)
++                    val scale = view.resources.displayMetrics.density * PIXELS_PER_UNIT_DP
++                    val axisX = curve(((x - lastX) / scale).coerceIn(-1f, 1f))
++                    val axisY = curve(((y - lastY) / scale).coerceIn(-1f, 1f))
++                    lastX = x
++                    lastY = y
++
++                    if (abs(axisX) > DEADZONE || abs(axisY) > DEADZONE) {
++                        MelonEmulator.setKhCameraAxes(axisX * MAX_SPEED, axisY * MAX_SPEED)
++                        handler.removeCallbacks(stopCamera)
++                        handler.postDelayed(stopCamera, PULSE_MS)
++                    }
++                }
++            }
++            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
++                pointerId = MotionEvent.INVALID_POINTER_ID
++                stop()
++            }
++        }
++        return true
++    }
++
++    private fun curve(value: Float): Float {
++        if (abs(value) < DEADZONE) return 0f
++        val sign = if (value < 0f) -1f else 1f
++        return sign * abs(value).pow(RESPONSE_CURVE)
++    }
++
++    private fun stop() {
++        handler.removeCallbacks(stopCamera)
++        MelonEmulator.setKhCameraAxes(0f, 0f)
++    }
++
++    private companion object {
++        const val PIXELS_PER_UNIT_DP = 48f
++        const val DEADZONE = 0.025f
++        const val RESPONSE_CURVE = 1.25f
++        const val MAX_SPEED = 0.62f
++        const val PULSE_MS = 34L
++    }
++}
+diff --git a/app/src/main/java/me/magnum/melonds/ui/emulator/ui/KhCutscenePlayerUi.kt b/app/src/main/java/me/magnum/melonds/ui/emulator/ui/KhCutscenePlayerUi.kt
+index 66916f5..8faf141 100644
+--- a/app/src/main/java/me/magnum/melonds/ui/emulator/ui/KhCutscenePlayerUi.kt
++++ b/app/src/main/java/me/magnum/melonds/ui/emulator/ui/KhCutscenePlayerUi.kt
+@@ -1,7 +1,7 @@
+ package me.magnum.melonds.ui.emulator.ui
+ 
+ import android.net.Uri
+-import android.view.SurfaceView
++import android.view.TextureView
+ import androidx.compose.foundation.background
+ import androidx.compose.foundation.layout.Box
+ import androidx.compose.foundation.layout.BoxWithConstraints
+@@ -178,8 +178,11 @@ fun KhCutscenePlayerUi(
+         BoxWithConstraints(modifier = Modifier.aspectRatio(16f / 9f)) {
+             val videoHeightPx = with(LocalDensity.current) { maxHeight.toPx() }
+             AndroidView(
+-                factory = { SurfaceView(it) },
+-                update = { player.setVideoSurfaceView(it) },
++                // TextureView participates in the normal Android view stack, allowing
++                // the touch controls to remain visibly above HD cinematics. SurfaceView
++                // owns a separate surface and was visually punching through the overlay.
++                factory = { TextureView(it) },
++                update = { player.setVideoTextureView(it) },
+                 modifier = Modifier.fillMaxSize(),
+             )
+             if (subtitleText.isNotEmpty()) {
