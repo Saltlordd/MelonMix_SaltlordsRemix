@@ -66,7 +66,11 @@ jobs:
       - name: Add universal KH labels and reliable zone layering
         run: git apply MelonMix-KH-Universal-Controls-v12.patch
       - name: Add the KH default preset and scene-aware controls
-        run: git apply MelonMix-KH-Default-and-Scene-Controls-v13.patch
+        # 1.0.2 changed nearby native cutscene code. Stage the already-applied v1-v12
+        # tree so Git can three-way merge our independent scene-control additions.
+        run: |
+          git add -A
+          git apply --3way MelonMix-KH-Default-and-Scene-Controls-v13.patch
 
       - name: Give v18 its own app identity
         run: sed -i 's/applicationIdSuffix = ".dev"/applicationIdSuffix = ".scenekh"/' app/build.gradle.kts
