@@ -1,0 +1,364 @@
+From 3afcc1c72e5dc6d0ebd8e8abe40d35bddc6edee9 Mon Sep 17 00:00:00 2001
+From: Codex <codex@local>
+Date: Sun, 13 Sep 2026 07:54:39 -0500
+Subject: [PATCH] Add independent movement zone, control opacity, and hide
+ toggle
+
+---
+ .../domain/model/layout/LayoutComponent.kt    |  1 +
+ .../domain/repositories/SettingsRepository.kt |  1 +
+ .../SharedPreferencesSettingsRepository.kt    |  6 ++++++
+ .../SingleButtonLayoutComponentViewBuilder.kt |  3 ++-
+ .../ui/common/input/KhCameraStickView.kt      |  9 +++++---
+ .../melonds/ui/emulator/EmulatorViewModel.kt  |  8 +++++--
+ ...untimeLayoutComponentViewBuilderFactory.kt |  1 +
+ .../melonds/ui/emulator/RuntimeLayoutView.kt  | 21 +++++++++++--------
+ .../input/KhMovementStickInputHandler.kt      |  8 +++++--
+ ...eSingleButtonLayoutComponentViewBuilder.kt |  3 ++-
+ .../model/RuntimeInputLayoutConfiguration.kt  |  1 +
+ .../layouteditor/LayoutEditorManagerView.kt   |  5 +++--
+ .../me/magnum/melonds/utils/InputUtils.kt     |  1 +
+ app/src/main/res/values/strings.xml           |  3 +++
+ app/src/main/res/xml/pref_input.xml           | 10 +++++++++
+ 15 files changed, 61 insertions(+), 20 deletions(-)
+
+diff --git a/app/src/main/java/me/magnum/melonds/domain/model/layout/LayoutComponent.kt b/app/src/main/java/me/magnum/melonds/domain/model/layout/LayoutComponent.kt
+index d5b2676..2fd95f8 100644
+--- a/app/src/main/java/me/magnum/melonds/domain/model/layout/LayoutComponent.kt
++++ b/app/src/main/java/me/magnum/melonds/domain/model/layout/LayoutComponent.kt
+@@ -19,6 +19,7 @@ enum class LayoutComponent(val matchingInputs: List<Input>) {
+     BUTTON_L_SHORTCUT_TOGGLE(listOf(Input.L)),
+     BUTTON_R(listOf(Input.R)),
+     BUTTON_KH_LOCK_ON(listOf(Input.KH_LOCK_ON)),
++    BUTTON_KH_TOGGLE_CONTROLS(listOf(Input.TOGGLE_SOFT_INPUT)),
+     KH_CAMERA_STICK(listOf(Input.KH_CAMERA_RIGHT, Input.KH_CAMERA_LEFT, Input.KH_CAMERA_DOWN, Input.KH_CAMERA_UP)),
+     KH_CAMERA_SWIPE_ZONE(emptyList()),
+     BUTTON_HINGE(listOf(Input.HINGE)),
+diff --git a/app/src/main/java/me/magnum/melonds/domain/repositories/SettingsRepository.kt b/app/src/main/java/me/magnum/melonds/domain/repositories/SettingsRepository.kt
+index f3e52dd..a83da94 100644
+--- a/app/src/main/java/me/magnum/melonds/domain/repositories/SettingsRepository.kt
++++ b/app/src/main/java/me/magnum/melonds/domain/repositories/SettingsRepository.kt
+@@ -74,6 +74,7 @@ interface SettingsRepository {
+     fun getSoftInputOpacity(): Flow<Int>
+     fun getSoftInputAutoHideSeconds(): Flow<Int>
+     fun getKhCameraSwipeTravelDp(): Flow<Int>
++    fun getKhMovementSwipeTravelDp(): Flow<Int>
+ 
+     fun isRetroAchievementsRichPresenceEnabled(): Boolean
+     fun isRetroAchievementsHardcoreEnabled(): Boolean
+diff --git a/app/src/main/java/me/magnum/melonds/impl/SharedPreferencesSettingsRepository.kt b/app/src/main/java/me/magnum/melonds/impl/SharedPreferencesSettingsRepository.kt
+index 2d340d6..cdffa23 100644
+--- a/app/src/main/java/me/magnum/melonds/impl/SharedPreferencesSettingsRepository.kt
++++ b/app/src/main/java/me/magnum/melonds/impl/SharedPreferencesSettingsRepository.kt
+@@ -552,6 +552,12 @@ class SharedPreferencesSettingsRepository(
+         }
+     }
+ 
++    override fun getKhMovementSwipeTravelDp(): Flow<Int> {
++        return getOrCreatePreferenceSharedFlow("kh_movement_swipe_travel_dp") {
++            preferences.getInt("kh_movement_swipe_travel_dp", 72).coerceIn(32, 160)
++        }
++    }
++
+     override fun isRetroAchievementsRichPresenceEnabled(): Boolean {
+         return preferences.getBoolean("ra_rich_presence", true)
+     }
+diff --git a/app/src/main/java/me/magnum/melonds/ui/common/componentbuilders/SingleButtonLayoutComponentViewBuilder.kt b/app/src/main/java/me/magnum/melonds/ui/common/componentbuilders/SingleButtonLayoutComponentViewBuilder.kt
+index 4df7b4a..d3824d3 100644
+--- a/app/src/main/java/me/magnum/melonds/ui/common/componentbuilders/SingleButtonLayoutComponentViewBuilder.kt
++++ b/app/src/main/java/me/magnum/melonds/ui/common/componentbuilders/SingleButtonLayoutComponentViewBuilder.kt
+@@ -21,6 +21,7 @@ class SingleButtonLayoutComponentViewBuilder(private val layoutComponent: Layout
+             LayoutComponent.BUTTON_L -> R.drawable.button_l
+             LayoutComponent.BUTTON_R -> R.drawable.button_r
+             LayoutComponent.BUTTON_KH_LOCK_ON -> R.drawable.button_kh_lock_on
++            LayoutComponent.BUTTON_KH_TOGGLE_CONTROLS -> R.drawable.ic_touch_enabled
+             LayoutComponent.BUTTON_START -> R.drawable.button_start
+             LayoutComponent.BUTTON_SELECT -> R.drawable.button_select
+             LayoutComponent.BUTTON_HINGE -> R.drawable.button_toggle_lid
+@@ -36,4 +37,4 @@ class SingleButtonLayoutComponentViewBuilder(private val layoutComponent: Layout
+             else -> -1
+         }
+     }
+-}
+\ No newline at end of file
++}
+diff --git a/app/src/main/java/me/magnum/melonds/ui/common/input/KhCameraStickView.kt b/app/src/main/java/me/magnum/melonds/ui/common/input/KhCameraStickView.kt
+index 5ec1f6b..bae3f14 100644
+--- a/app/src/main/java/me/magnum/melonds/ui/common/input/KhCameraStickView.kt
++++ b/app/src/main/java/me/magnum/melonds/ui/common/input/KhCameraStickView.kt
+@@ -26,17 +26,20 @@ class KhCameraStickView(context: Context) : View(context) {
+     private var stickY = 0f
+     private var originX = 0f
+     private var originY = 0f
++    private var summonedRadius: Float? = null
+     private var active = false
+ 
+-    fun beginTouch(x: Float, y: Float) {
++    fun beginTouch(x: Float, y: Float, radius: Float? = null) {
+         originX = x
+         originY = y
++        summonedRadius = radius
+         active = true
+         setStickPosition(0f, 0f)
+     }
+ 
+     fun endTouch() {
+         active = false
++        summonedRadius = null
+         setStickPosition(0f, 0f)
+     }
+ 
+@@ -55,8 +58,8 @@ class KhCameraStickView(context: Context) : View(context) {
+         val size = min(width, height).toFloat()
+         val centerX = originX
+         val centerY = originY
+-        val baseRadius = size * 0.46f
+-        val knobRadius = size * 0.18f
++        val baseRadius = summonedRadius ?: (size * 0.46f)
++        val knobRadius = if (summonedRadius != null) baseRadius * 0.32f else size * 0.18f
+         val travelRadius = baseRadius - knobRadius
+ 
+         canvas.drawCircle(centerX, centerY, baseRadius, basePaint)
+diff --git a/app/src/main/java/me/magnum/melonds/ui/emulator/EmulatorViewModel.kt b/app/src/main/java/me/magnum/melonds/ui/emulator/EmulatorViewModel.kt
+index 3817fc7..33b9f0c 100644
+--- a/app/src/main/java/me/magnum/melonds/ui/emulator/EmulatorViewModel.kt
++++ b/app/src/main/java/me/magnum/melonds/ui/emulator/EmulatorViewModel.kt
+@@ -658,7 +658,10 @@ class EmulatorViewModel @Inject constructor(
+                     settingsRepository.getSoftInputOpacity(),
+                     settingsRepository.getSoftInputAutoHideSeconds(),
+                     settingsRepository.getKhCameraSwipeTravelDp(),
+-                ) { opacity, autoHideSeconds, swipeTravelDp -> Triple(opacity, autoHideSeconds, swipeTravelDp) },
++                    settingsRepository.getKhMovementSwipeTravelDp(),
++                ) { opacity, autoHideSeconds, cameraTravelDp, movementTravelDp ->
++                    Triple(opacity, autoHideSeconds, cameraTravelDp to movementTravelDp)
++                },
+             ) { layoutConfiguration, variant, softInputBehaviour, isHapticFeedbackEnabled, inputSettings ->
+                 val layout = variant?.second
+                 if (layoutConfiguration == null || layout == null) {
+@@ -674,7 +677,8 @@ class EmulatorViewModel @Inject constructor(
+                         softInputBehaviour = softInputBehaviour,
+                         softInputOpacity = opacity,
+                         softInputAutoHideSeconds = inputSettings.second,
+-                        khCameraSwipeTravelDp = inputSettings.third,
++                        khCameraSwipeTravelDp = inputSettings.third.first,
++                        khMovementSwipeTravelDp = inputSettings.third.second,
+                         isHapticFeedbackEnabled = isHapticFeedbackEnabled,
+                         layoutOrientation = layoutConfiguration.orientation,
+                         layout = layout,
+diff --git a/app/src/main/java/me/magnum/melonds/ui/emulator/RuntimeLayoutComponentViewBuilderFactory.kt b/app/src/main/java/me/magnum/melonds/ui/emulator/RuntimeLayoutComponentViewBuilderFactory.kt
+index 9b7877b..d9fda63 100644
+--- a/app/src/main/java/me/magnum/melonds/ui/emulator/RuntimeLayoutComponentViewBuilderFactory.kt
++++ b/app/src/main/java/me/magnum/melonds/ui/emulator/RuntimeLayoutComponentViewBuilderFactory.kt
+@@ -29,6 +29,7 @@ class RuntimeLayoutComponentViewBuilderFactory : LayoutComponentViewBuilderFacto
+                 LayoutComponent.BUTTON_FAST_FORWARD_TOGGLE,
+                 LayoutComponent.BUTTON_MICROPHONE_TOGGLE,
+                 LayoutComponent.BUTTON_TOGGLE_SOFT_INPUT -> ToggleableSingleButtonLayoutComponentViewBuilder(layoutComponent)
++                LayoutComponent.BUTTON_KH_TOGGLE_CONTROLS -> ToggleableSingleButtonLayoutComponentViewBuilder(layoutComponent)
+                 else -> SingleButtonLayoutComponentViewBuilder(layoutComponent)
+             }
+ 
+diff --git a/app/src/main/java/me/magnum/melonds/ui/emulator/RuntimeLayoutView.kt b/app/src/main/java/me/magnum/melonds/ui/emulator/RuntimeLayoutView.kt
+index 2a05f19..e1c67fb 100644
+--- a/app/src/main/java/me/magnum/melonds/ui/emulator/RuntimeLayoutView.kt
++++ b/app/src/main/java/me/magnum/melonds/ui/emulator/RuntimeLayoutView.kt
+@@ -65,6 +65,7 @@ class RuntimeLayoutView(context: Context, attrs: AttributeSet? = null) : LayoutV
+     fun toggleSoftInputVisibility() {
+         isSoftInputVisible = !isSoftInputVisible
+         setLayoutComponentToggleState(LayoutComponent.BUTTON_TOGGLE_SOFT_INPUT, isSoftInputVisible)
++        setLayoutComponentToggleState(LayoutComponent.BUTTON_KH_TOGGLE_CONTROLS, isSoftInputVisible)
+         updateVisibility()
+     }
+ 
+@@ -89,6 +90,7 @@ class RuntimeLayoutView(context: Context, attrs: AttributeSet? = null) : LayoutV
+         updateInputs()
+         updateVisibility()
+         setLayoutComponentToggleState(LayoutComponent.BUTTON_TOGGLE_SOFT_INPUT, isSoftInputVisible)
++        setLayoutComponentToggleState(LayoutComponent.BUTTON_KH_TOGGLE_CONTROLS, isSoftInputVisible)
+         showSoftInputsAndScheduleHide()
+     }
+ 
+@@ -120,7 +122,7 @@ class RuntimeLayoutView(context: Context, attrs: AttributeSet? = null) : LayoutV
+         getLayoutComponentViews().forEach {
+             if (!it.component.isScreen()) {
+                 it.view.animate().cancel()
+-                it.view.alpha = inputAlpha
++                it.view.alpha = inputAlpha * it.view.baseAlpha
+             }
+         }
+         val delaySeconds = currentRuntimeLayout?.softInputAutoHideSeconds ?: 5
+@@ -151,7 +153,9 @@ class RuntimeLayoutView(context: Context, attrs: AttributeSet? = null) : LayoutV
+         val enableHapticFeedback = currentRuntimeLayout.isHapticFeedbackEnabled
+         systemInputHandler?.let {
+             getLayoutComponentView(LayoutComponent.DPAD)?.view?.setOnTouchListener(DpadInputHandler(it, enableHapticFeedback, touchVibrator))
+-            getLayoutComponentView(LayoutComponent.MOVEMENT_STICK)?.view?.setOnTouchListener(KhMovementStickInputHandler(it, enableHapticFeedback, touchVibrator))
++            getLayoutComponentView(LayoutComponent.MOVEMENT_STICK)?.view?.setOnTouchListener(
++                KhMovementStickInputHandler(it, enableHapticFeedback, touchVibrator, currentRuntimeLayout.khMovementSwipeTravelDp)
++            )
+             getLayoutComponentView(LayoutComponent.KH_COMMAND_PAD)?.view?.setOnTouchListener(KhCommandPadInputHandler(it, enableHapticFeedback, touchVibrator))
+             getLayoutComponentView(LayoutComponent.BUTTONS)?.view?.setOnTouchListener(ButtonsInputHandler(it, enableHapticFeedback, touchVibrator))
+             getLayoutComponentView(LayoutComponent.BUTTON_KH_ATTACK)?.view?.setOnTouchListener(SingleButtonInputHandler(it, Input.A, enableHapticFeedback, touchVibrator))
+@@ -172,6 +176,7 @@ class RuntimeLayoutView(context: Context, attrs: AttributeSet? = null) : LayoutV
+             getLayoutComponentView(LayoutComponent.BUTTON_FAST_FORWARD_TOGGLE)?.view?.setOnTouchListener(SingleButtonInputHandler(it, Input.FAST_FORWARD, enableHapticFeedback, touchVibrator))
+             getLayoutComponentView(LayoutComponent.BUTTON_MICROPHONE_TOGGLE)?.view?.setOnTouchListener(SingleButtonInputHandler(it, Input.MICROPHONE, enableHapticFeedback, touchVibrator))
+             getLayoutComponentView(LayoutComponent.BUTTON_TOGGLE_SOFT_INPUT)?.view?.setOnTouchListener(SingleButtonInputHandler(it, Input.TOGGLE_SOFT_INPUT, enableHapticFeedback, touchVibrator))
++            getLayoutComponentView(LayoutComponent.BUTTON_KH_TOGGLE_CONTROLS)?.view?.setOnTouchListener(SingleButtonInputHandler(it, Input.TOGGLE_SOFT_INPUT, enableHapticFeedback, touchVibrator))
+             getLayoutComponentView(LayoutComponent.BUTTON_SWAP_SCREENS)?.view?.setOnTouchListener(SingleButtonInputHandler(it, Input.SWAP_SCREENS, enableHapticFeedback, touchVibrator))
+             getLayoutComponentView(LayoutComponent.BUTTON_QUICK_SAVE)?.view?.setOnTouchListener(SingleButtonInputHandler(it, Input.QUICK_SAVE, enableHapticFeedback, touchVibrator))
+             getLayoutComponentView(LayoutComponent.BUTTON_QUICK_LOAD)?.view?.setOnTouchListener(SingleButtonInputHandler(it, Input.QUICK_LOAD, enableHapticFeedback, touchVibrator))
+@@ -187,7 +192,7 @@ class RuntimeLayoutView(context: Context, attrs: AttributeSet? = null) : LayoutV
+         getLayoutComponentViews().forEach {
+             if (!it.component.isScreen()) {
+                 it.view.apply {
+-                    alpha = inputAlpha
++                    alpha = inputAlpha * baseAlpha
+                 }
+             }
+         }
+@@ -239,12 +244,10 @@ class RuntimeLayoutView(context: Context, attrs: AttributeSet? = null) : LayoutV
+         }
+ 
+         if (!isSoftInputVisible) {
+-            // Hide everything except the soft input toggle button if it was not already hidden by the soft input behaviour logic
+-            hiddenComponents = if (hiddenComponents.contains(LayoutComponent.BUTTON_TOGGLE_SOFT_INPUT)) {
+-                LayoutComponent.entries.toList()
+-            } else {
+-                LayoutComponent.entries.toList().filter { it != LayoutComponent.BUTTON_TOGGLE_SOFT_INPUT}
+-            }
++            // The dedicated KH toggle must always remain reachable so the controls
++            // can be restored even when controller-hiding rules are also active.
++            val controlToggles = setOf(LayoutComponent.BUTTON_TOGGLE_SOFT_INPUT, LayoutComponent.BUTTON_KH_TOGGLE_CONTROLS)
++            hiddenComponents = LayoutComponent.entries.toList().filterNot { it in controlToggles }
+         }
+ 
+         val visibleComponents = LayoutComponent.entries.filter { !hiddenComponents.contains(it) }
+diff --git a/app/src/main/java/me/magnum/melonds/ui/emulator/input/KhMovementStickInputHandler.kt b/app/src/main/java/me/magnum/melonds/ui/emulator/input/KhMovementStickInputHandler.kt
+index afcd898..05b64e9 100644
+--- a/app/src/main/java/me/magnum/melonds/ui/emulator/input/KhMovementStickInputHandler.kt
++++ b/app/src/main/java/me/magnum/melonds/ui/emulator/input/KhMovementStickInputHandler.kt
+@@ -11,6 +11,7 @@ class KhMovementStickInputHandler(
+     inputListener: IInputListener,
+     enableHapticFeedback: Boolean,
+     touchVibrator: TouchVibrator,
++    private val travelDp: Int,
+ ) : FeedbackInputHandler(inputListener, enableHapticFeedback, touchVibrator) {
+     private var activePointerId = MotionEvent.INVALID_POINTER_ID
+     private var originX = 0f
+@@ -24,7 +25,7 @@ class KhMovementStickInputHandler(
+                 activePointerId = event.getPointerId(0)
+                 originX = event.x
+                 originY = event.y
+-                stickView.beginTouch(originX, originY)
++                stickView.beginTouch(originX, originY, travelRadius(view))
+                 performHapticFeedback(view, HapticFeedbackType.KEY_PRESS)
+             }
+             MotionEvent.ACTION_MOVE -> {
+@@ -38,7 +39,7 @@ class KhMovementStickInputHandler(
+     }
+ 
+     private fun updateMovement(view: KhCameraStickView, touchX: Float, touchY: Float) {
+-        val radius = (minOf(view.width, view.height) * 0.28f).coerceAtLeast(1f)
++        val radius = travelRadius(view)
+         var x = (touchX - originX) / radius
+         var y = (touchY - originY) / radius
+         val magnitude = sqrt(x * x + y * y)
+@@ -69,6 +70,9 @@ class KhMovementStickInputHandler(
+         view.endTouch()
+     }
+ 
++    private fun travelRadius(view: View): Float =
++        view.resources.displayMetrics.density * travelDp.coerceIn(32, 160)
++
+     private companion object {
+         const val DEADZONE = 0.18f
+         const val DIRECTION_THRESHOLD = 0.30f
+diff --git a/app/src/main/java/me/magnum/melonds/ui/emulator/input/componentbuilder/ToggleableSingleButtonLayoutComponentViewBuilder.kt b/app/src/main/java/me/magnum/melonds/ui/emulator/input/componentbuilder/ToggleableSingleButtonLayoutComponentViewBuilder.kt
+index 8541c13..0fa9a1c 100644
+--- a/app/src/main/java/me/magnum/melonds/ui/emulator/input/componentbuilder/ToggleableSingleButtonLayoutComponentViewBuilder.kt
++++ b/app/src/main/java/me/magnum/melonds/ui/emulator/input/componentbuilder/ToggleableSingleButtonLayoutComponentViewBuilder.kt
+@@ -24,7 +24,8 @@ class ToggleableSingleButtonLayoutComponentViewBuilder(private val layoutCompone
+             LayoutComponent.BUTTON_FAST_FORWARD_TOGGLE -> R.drawable.button_fast_forward to R.drawable.button_fast_forward_disabled
+             LayoutComponent.BUTTON_MICROPHONE_TOGGLE -> R.drawable.button_microphone to R.drawable.button_microphone_disabled
+             LayoutComponent.BUTTON_TOGGLE_SOFT_INPUT -> R.drawable.ic_touch_enabled to R.drawable.ic_touch_disabled
++            LayoutComponent.BUTTON_KH_TOGGLE_CONTROLS -> R.drawable.ic_touch_enabled to R.drawable.ic_touch_disabled
+             else -> null to null
+         }
+     }
+-}
+\ No newline at end of file
++}
+diff --git a/app/src/main/java/me/magnum/melonds/ui/emulator/model/RuntimeInputLayoutConfiguration.kt b/app/src/main/java/me/magnum/melonds/ui/emulator/model/RuntimeInputLayoutConfiguration.kt
+index 0f2950f..5c1f984 100644
+--- a/app/src/main/java/me/magnum/melonds/ui/emulator/model/RuntimeInputLayoutConfiguration.kt
++++ b/app/src/main/java/me/magnum/melonds/ui/emulator/model/RuntimeInputLayoutConfiguration.kt
+@@ -9,6 +9,7 @@ data class RuntimeInputLayoutConfiguration(
+     val softInputOpacity: Int,
+     val softInputAutoHideSeconds: Int,
+     val khCameraSwipeTravelDp: Int,
++    val khMovementSwipeTravelDp: Int,
+     val isHapticFeedbackEnabled: Boolean,
+     val layoutOrientation: LayoutConfiguration.LayoutOrientation,
+     val layout: UILayout,
+diff --git a/app/src/main/java/me/magnum/melonds/ui/layouteditor/LayoutEditorManagerView.kt b/app/src/main/java/me/magnum/melonds/ui/layouteditor/LayoutEditorManagerView.kt
+index 13bba3b..15cad08 100644
+--- a/app/src/main/java/me/magnum/melonds/ui/layouteditor/LayoutEditorManagerView.kt
++++ b/app/src/main/java/me/magnum/melonds/ui/layouteditor/LayoutEditorManagerView.kt
+@@ -576,8 +576,9 @@ class LayoutEditorManagerView(
+         binding.seekBarWidth.isVisible = isScreen
+         binding.layoutHeightLabels.isVisible = isScreen
+         binding.seekBarHeight.isVisible = isScreen
+-        binding.layoutAlphaLabels.isVisible = isScreen
+-        binding.seekBarAlpha.isVisible = isScreen
++        // Every component already stores alpha; expose it for controls as well as screens.
++        binding.layoutAlphaLabels.isVisible = true
++        binding.seekBarAlpha.isVisible = true
+         binding.layoutAspectRatio.isVisible = isScreen
+         binding.checkboxAboveScreen.isVisible = isScreen
+         binding.buttonCenterHorizontal.isVisible = isScreen
+diff --git a/app/src/main/java/me/magnum/melonds/utils/InputUtils.kt b/app/src/main/java/me/magnum/melonds/utils/InputUtils.kt
+index 36bd44f..9245adc 100644
+--- a/app/src/main/java/me/magnum/melonds/utils/InputUtils.kt
++++ b/app/src/main/java/me/magnum/melonds/utils/InputUtils.kt
+@@ -19,6 +19,7 @@ fun getLayoutComponentName(layoutComponent: LayoutComponent): Int {
+         LayoutComponent.BUTTON_L_SHORTCUT_TOGGLE -> R.string.input_l_shortcut_toggle
+         LayoutComponent.BUTTON_R -> R.string.input_r
+         LayoutComponent.BUTTON_KH_LOCK_ON -> R.string.input_kh_lock_on
++        LayoutComponent.BUTTON_KH_TOGGLE_CONTROLS -> R.string.input_kh_toggle_controls
+         LayoutComponent.KH_CAMERA_STICK -> R.string.input_kh_camera_stick
+         LayoutComponent.KH_CAMERA_SWIPE_ZONE -> R.string.input_kh_camera_swipe_zone
+         LayoutComponent.BUTTON_START -> R.string.input_start
+diff --git a/app/src/main/res/values/strings.xml b/app/src/main/res/values/strings.xml
+index 60d6e59..8f18121 100644
+--- a/app/src/main/res/values/strings.xml
++++ b/app/src/main/res/values/strings.xml
+@@ -312,6 +312,9 @@
+     <string name="kh_camera_swipe_zone_editor_label">CAMERA\nSWIPE ZONE\n(appears only while touched)</string>
+     <string name="kh_camera_swipe_travel">Swipe camera travel</string>
+     <string name="kh_camera_swipe_travel_summary">Distance from the initial touch needed for full camera speed (dp)</string>
++    <string name="kh_movement_swipe_travel">Movement joystick travel</string>
++    <string name="kh_movement_swipe_travel_summary">Summoned movement joystick radius, independent of its touch-zone size (dp)</string>
++    <string name="input_kh_toggle_controls">KH: Hide controls</string>
+     <string name="retroachievements">RetroAchievements</string> <!-- Keep words together because this is the official name -->
+     <string name="retroachievements_summary">Login &amp; manage RetroAchievements integration</string> <!-- Keep words together because this is the official name -->
+     <string name="enable_rich_presence">Enable rich presence</string>
+diff --git a/app/src/main/res/xml/pref_input.xml b/app/src/main/res/xml/pref_input.xml
+index 7fc09ed..ad4426e 100644
+--- a/app/src/main/res/xml/pref_input.xml
++++ b/app/src/main/res/xml/pref_input.xml
+@@ -81,4 +81,14 @@
+             android:defaultValue="72"
+             app:min="32"
+             android:max="160" />
++
++    <SeekBarPreference
++            android:key="kh_movement_swipe_travel_dp"
++            android:title="@string/kh_movement_swipe_travel"
++            android:summary="@string/kh_movement_swipe_travel_summary"
++            app:iconSpaceReserved="false"
++            app:showSeekBarValue="true"
++            android:defaultValue="72"
++            app:min="32"
++            android:max="160" />
+ </PreferenceScreen>
+-- 
+2.51.1
+
