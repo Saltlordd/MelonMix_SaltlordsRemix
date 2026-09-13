@@ -1,0 +1,36 @@
+From 5bae48e16bcf5a17e61b8f044e5de24f2906d57d Mon Sep 17 00:00:00 2001
+From: Codex <codex@local>
+Date: Sun, 13 Sep 2026 08:11:16 -0500
+Subject: [PATCH] Fix per-control opacity wrapper references
+
+---
+ .../java/me/magnum/melonds/ui/emulator/RuntimeLayoutView.kt | 6 ++----
+ 1 file changed, 2 insertions(+), 4 deletions(-)
+
+diff --git a/app/src/main/java/me/magnum/melonds/ui/emulator/RuntimeLayoutView.kt b/app/src/main/java/me/magnum/melonds/ui/emulator/RuntimeLayoutView.kt
+index e1c67fb..028efbf 100644
+--- a/app/src/main/java/me/magnum/melonds/ui/emulator/RuntimeLayoutView.kt
++++ b/app/src/main/java/me/magnum/melonds/ui/emulator/RuntimeLayoutView.kt
+@@ -122,7 +122,7 @@ class RuntimeLayoutView(context: Context, attrs: AttributeSet? = null) : LayoutV
+         getLayoutComponentViews().forEach {
+             if (!it.component.isScreen()) {
+                 it.view.animate().cancel()
+-                it.view.alpha = inputAlpha * it.view.baseAlpha
++                it.view.alpha = inputAlpha * it.baseAlpha
+             }
+         }
+         val delaySeconds = currentRuntimeLayout?.softInputAutoHideSeconds ?: 5
+@@ -191,9 +191,7 @@ class RuntimeLayoutView(context: Context, attrs: AttributeSet? = null) : LayoutV
+ 
+         getLayoutComponentViews().forEach {
+             if (!it.component.isScreen()) {
+-                it.view.apply {
+-                    alpha = inputAlpha * baseAlpha
+-                }
++                it.view.alpha = inputAlpha * it.baseAlpha
+             }
+         }
+ 
+-- 
+2.51.1
+
