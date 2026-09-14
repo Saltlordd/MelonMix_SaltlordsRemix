@@ -1,0 +1,41 @@
+From 612a9fdca982a4c7b2d42db3662ba51fc0120ada Mon Sep 17 00:00:00 2001
+From: Codex <codex@example.invalid>
+Date: Mon, 14 Sep 2026 02:24:18 -0400
+Subject: [PATCH] Expose internal layout backup and restore
+
+---
+ app/src/main/res/xml/pref_system.xml | 6 +++---
+ 1 file changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/app/src/main/res/xml/pref_system.xml b/app/src/main/res/xml/pref_system.xml
+index 36d8143..96997de 100644
+--- a/app/src/main/res/xml/pref_system.xml
++++ b/app/src/main/res/xml/pref_system.xml
+@@ -20,7 +20,7 @@
+     <Preference
+             android:key="backup_internal_layout"
+             android:title="@string/backup_internal_layout"
+-            app:isPreferenceVisible="@bool/settings_backup_restore_enabled"
++            app:isPreferenceVisible="true"
+             app:iconSpaceReserved="false" />
+ 
+     <Preference
+@@ -32,7 +32,7 @@
+     <Preference
+             android:key="restore_internal_layout"
+             android:title="@string/restore_internal_layout"
+-            app:isPreferenceVisible="@bool/settings_backup_restore_enabled"
++            app:isPreferenceVisible="true"
+             app:iconSpaceReserved="false" />
+ 
+     <Preference
+@@ -40,4 +40,4 @@
+             android:title="@string/restore_external_layout"
+             app:isPreferenceVisible="false"
+             app:iconSpaceReserved="false" />
+-</PreferenceScreen>
+\ No newline at end of file
++</PreferenceScreen>
+-- 
+2.51.1
+
