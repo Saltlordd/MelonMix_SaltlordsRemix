@@ -1,0 +1,36 @@
+From bcaf5c95476c1d26c49d904b4077d6734bf4f424 Mon Sep 17 00:00:00 2001
+From: Codex <codex@example.invalid>
+Date: Mon, 14 Sep 2026 00:31:37 -0400
+Subject: [PATCH] Bias portrait KH viewport upward
+
+---
+ .../magnum/melonds/impl/layout/UILayoutProvider.kt   | 12 ++++++++++--
+ 1 file changed, 10 insertions(+), 2 deletions(-)
+
+diff --git a/app/src/main/java/me/magnum/melonds/impl/layout/UILayoutProvider.kt b/app/src/main/java/me/magnum/melonds/impl/layout/UILayoutProvider.kt
+index 0a2a882..3d2d893 100644
+--- a/app/src/main/java/me/magnum/melonds/impl/layout/UILayoutProvider.kt
++++ b/app/src/main/java/me/magnum/melonds/impl/layout/UILayoutProvider.kt
+@@ -74,9 +74,17 @@ class UILayoutProvider(private val defaultLayoutProvider: DefaultLayoutProvider)
+         val uiHeight = variant.uiSize.y
+         val screenRect = if (uiHeight > uiWidth) {
+             // A landscape 4:3 viewport uses substantially more of a tall cover display
+-            // than 16:9 while retaining the DS-like presentation requested by KHDS.
++            // than 16:9 while retaining the DS-like presentation requested by KHDS. Place
++            // it 40% of the way through the safe vertical gap instead of dead-centre: this
++            // leaves a little more clear control space below on both cover and unfolded
++            // portrait displays, without ever crossing a cutout/system-bar safe inset.
+             val boxHeight = (uiWidth * 3f / 4f).toInt()
+-            Rect(0, (uiHeight - boxHeight) / 2, uiWidth, boxHeight)
++            val safeTop = variant.uiInsets.top
++            val safeBottom = variant.uiInsets.bottom
++            val safeHeight = (uiHeight - safeTop - safeBottom).coerceAtLeast(0)
++            val spareHeight = (safeHeight - boxHeight).coerceAtLeast(0)
++            val biasedTop = safeTop + (spareHeight * 0.40f).toInt()
++            Rect(0, biasedTop, uiWidth, boxHeight)
+         } else {
+             // [KH touch] The unfolded Fold display is squarer than the DS UI's 4:3
+             // canvas. Asking the KH compositor for that near-square ratio crops the
+-- 
+2.51.1
+
