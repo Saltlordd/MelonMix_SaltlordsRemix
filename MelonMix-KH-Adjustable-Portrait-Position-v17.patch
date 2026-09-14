@@ -1,0 +1,198 @@
+From 477188a3c639692bcdc1d4cd3aee4bea48d2956c Mon Sep 17 00:00:00 2001
+From: Codex <codex@example.invalid>
+Date: Mon, 14 Sep 2026 01:32:28 -0400
+Subject: [PATCH] Add adjustable portrait viewport position
+
+---
+ .../domain/repositories/SettingsRepository.kt |  1 +
+ .../SharedPreferencesSettingsRepository.kt    |  8 ++++
+ .../melonds/impl/layout/UILayoutProvider.kt   | 41 ++++++++++++++-----
+ .../melonds/ui/emulator/EmulatorViewModel.kt  | 11 +++++
+ app/src/main/res/values/strings.xml           |  2 +
+ app/src/main/res/xml/pref_video.xml           | 14 ++++++-
+ 6 files changed, 65 insertions(+), 12 deletions(-)
+
+diff --git a/app/src/main/java/me/magnum/melonds/domain/repositories/SettingsRepository.kt b/app/src/main/java/me/magnum/melonds/domain/repositories/SettingsRepository.kt
+index a83da94..a949689 100644
+--- a/app/src/main/java/me/magnum/melonds/domain/repositories/SettingsRepository.kt
++++ b/app/src/main/java/me/magnum/melonds/domain/repositories/SettingsRepository.kt
+@@ -56,6 +56,7 @@ interface SettingsRepository {
+     // [KHMM] subtitles over HD replacement cutscenes (desktop DisableSubtitles, inverted)
+     fun getKhShowSubtitles(): Flow<Boolean>
+     fun getKhSingleScreenMode(): Flow<Boolean>
++    fun getKhPortraitScreenPosition(): Flow<Int>
+ 
+     fun getRomSortingMode(): SortingMode
+     fun getRomSortingOrder(): SortingOrder
+diff --git a/app/src/main/java/me/magnum/melonds/impl/SharedPreferencesSettingsRepository.kt b/app/src/main/java/me/magnum/melonds/impl/SharedPreferencesSettingsRepository.kt
+index cdffa23..5442d58 100644
+--- a/app/src/main/java/me/magnum/melonds/impl/SharedPreferencesSettingsRepository.kt
++++ b/app/src/main/java/me/magnum/melonds/impl/SharedPreferencesSettingsRepository.kt
+@@ -368,6 +368,14 @@ class SharedPreferencesSettingsRepository(
+         }
+     }
+ 
++    // Percentage of the safe spare vertical space placed above the 4:3 portrait viewport.
++    // 0 is the highest safe position; 50 is mathematically centred.
++    override fun getKhPortraitScreenPosition(): Flow<Int> {
++        return getOrCreatePreferenceSharedFlow("kh_portrait_screen_position") {
++            preferences.getInt("kh_portrait_screen_position", 20).coerceIn(0, 50)
++        }
++    }
++
+     override fun getRenderStrategy(): Flow<RenderStrategy> {
+         return getOrCreatePreferenceSharedFlow("front_rendering") {
+             if (preferences.getBoolean("front_rendering", false)) {
+diff --git a/app/src/main/java/me/magnum/melonds/impl/layout/UILayoutProvider.kt b/app/src/main/java/me/magnum/melonds/impl/layout/UILayoutProvider.kt
+index 3d2d893..393760f 100644
+--- a/app/src/main/java/me/magnum/melonds/impl/layout/UILayoutProvider.kt
++++ b/app/src/main/java/me/magnum/melonds/impl/layout/UILayoutProvider.kt
+@@ -43,8 +43,14 @@ class UILayoutProvider(private val defaultLayoutProvider: DefaultLayoutProvider)
+     // to the display. This flag overrides whatever layout would otherwise be used, without
+     // touching the user's saved layouts.
+     private val khTopScreenOnly = MutableStateFlow(false)
+-
+-    val currentLayout = combine(_currentLayoutConfiguration, currentLayoutVariant, khTopScreenOnly) { layoutConfiguration, variant, topScreenOnly ->
++    private val khPortraitScreenPosition = MutableStateFlow(20)
++
++    val currentLayout = combine(
++        _currentLayoutConfiguration,
++        currentLayoutVariant,
++        khTopScreenOnly,
++        khPortraitScreenPosition,
++    ) { layoutConfiguration, variant, topScreenOnly, portraitScreenPosition ->
+         if (layoutConfiguration == null || variant == null) {
+             null
+         } else {
+@@ -56,7 +62,11 @@ class UILayoutProvider(private val defaultLayoutProvider: DefaultLayoutProvider)
+             } else {
+                 getOptimalLayoutForVariant(layoutConfiguration, variant)
+             }
+-            variant to if (topScreenOnly) buildKhTopScreenOnlyLayout(layout, variant) else layout
++            variant to if (topScreenOnly) {
++                buildKhTopScreenOnlyLayout(layout, variant, portraitScreenPosition)
++            } else {
++                layout
++            }
+         }
+     }
+ 
+@@ -64,26 +74,35 @@ class UILayoutProvider(private val defaultLayoutProvider: DefaultLayoutProvider)
+         khTopScreenOnly.value = enabled
+     }
+ 
++    fun setKhPortraitScreenPosition(position: Int) {
++        khPortraitScreenPosition.value = position.coerceIn(0, 50)
++    }
++
+     // [KHMM] Replace the screen components of the layout that would otherwise be shown with a
+     // single TOP_SCREEN covering the whole UI (landscape: stretched full-screen; portrait: a
+-    // full-width 16:9 box, vertically centered). Buttons and other components are kept as the
+-    // user/default layout placed them. The on-screen rect's real aspect ratio is pushed to the
+-    // plugin separately, so stretching does not distort the composite.
+-    private fun buildKhTopScreenOnlyLayout(baseLayout: UILayout, variant: UILayoutVariant): UILayout {
++    // full-width 4:3 box positioned within the safe vertical gap). Buttons and other components
++    // are kept as the user/default layout placed them. The on-screen rect's real aspect ratio is
++    // pushed to the plugin separately, so stretching does not distort the composite.
++    private fun buildKhTopScreenOnlyLayout(
++        baseLayout: UILayout,
++        variant: UILayoutVariant,
++        portraitScreenPosition: Int,
++    ): UILayout {
+         val uiWidth = variant.uiSize.x
+         val uiHeight = variant.uiSize.y
+         val screenRect = if (uiHeight > uiWidth) {
+             // A landscape 4:3 viewport uses substantially more of a tall cover display
+             // than 16:9 while retaining the DS-like presentation requested by KHDS. Place
+-            // it 40% of the way through the safe vertical gap instead of dead-centre: this
+-            // leaves a little more clear control space below on both cover and unfolded
+-            // portrait displays, without ever crossing a cutout/system-bar safe inset.
++            // it 20% of the way through the safe vertical gap instead of dead-centre: this
++            // creates a handheld-like upper-screen composition and leaves more clear control
++            // space below on both cover and unfolded portrait displays, without ever crossing
++            // a cutout/system-bar safe inset.
+             val boxHeight = (uiWidth * 3f / 4f).toInt()
+             val safeTop = variant.uiInsets.top
+             val safeBottom = variant.uiInsets.bottom
+             val safeHeight = (uiHeight - safeTop - safeBottom).coerceAtLeast(0)
+             val spareHeight = (safeHeight - boxHeight).coerceAtLeast(0)
+-            val biasedTop = safeTop + (spareHeight * 0.40f).toInt()
++            val biasedTop = safeTop + (spareHeight * portraitScreenPosition / 100f).toInt()
+             Rect(0, biasedTop, uiWidth, boxHeight)
+         } else {
+             // [KH touch] The unfolded Fold display is squarer than the DS UI's 4:3
+diff --git a/app/src/main/java/me/magnum/melonds/ui/emulator/EmulatorViewModel.kt b/app/src/main/java/me/magnum/melonds/ui/emulator/EmulatorViewModel.kt
+index c307e3a..337a984 100644
+--- a/app/src/main/java/me/magnum/melonds/ui/emulator/EmulatorViewModel.kt
++++ b/app/src/main/java/me/magnum/melonds/ui/emulator/EmulatorViewModel.kt
+@@ -285,6 +285,7 @@ class EmulatorViewModel @Inject constructor(
+         startObservingKhCameraSensitivity()
+         startObservingKhShowSubtitles()
+         startObservingKhSingleScreenMode()
++        startObservingKhPortraitScreenPosition()
+         startRetroAchievementsSession(rom)
+ 
+         val cheats = getRomInfo(rom)?.let { getRomEnabledCheats(it) } ?: emptyList()
+@@ -777,6 +778,16 @@ class EmulatorViewModel @Inject constructor(
+         }
+     }
+ 
++    // [KHMM] Portrait viewport placement is frontend-only and can update live when the user
++    // returns from Video settings. 0% is highest-safe; 50% is centred.
++    private fun startObservingKhPortraitScreenPosition() {
++        sessionCoroutineScope.launch {
++            settingsRepository.getKhPortraitScreenPosition().collect {
++                uiLayoutProvider.setKhPortraitScreenPosition(it)
++            }
++        }
++    }
++
+     private fun startObservingEmulatorEvents() {
+         sessionCoroutineScope.launch {
+             emulatorManager.emulatorEvents.collect {
+diff --git a/app/src/main/res/values/strings.xml b/app/src/main/res/values/strings.xml
+index dab3b9b..972ace4 100644
+--- a/app/src/main/res/values/strings.xml
++++ b/app/src/main/res/values/strings.xml
+@@ -228,6 +228,8 @@
+     <string name="kh_game_language">Game language (menus &amp; subtitles)</string>
+     <string name="kh_single_screen_mode">Single screen mode</string>
+     <string name="kh_single_screen_mode_summary">Show everything on one enhanced screen. Turn off on dual-screen devices (such as the AYN Thor) to keep bottom screen content on the bottom screen.</string>
++    <string name="kh_portrait_screen_position">Portrait screen position</string>
++    <string name="kh_portrait_screen_position_summary">Position within the safe vertical space: 0% is highest, 20% is handheld style, and 50% is centred.</string>
+     <string name="kh_show_subtitles">Cutscene subtitles (KH Melon Mix)</string>
+     <string name="kh_show_subtitles_summary">Display subtitles during HD cutscene playback, when available. The language follows the Game language setting.</string>
+     <string name="kh_bgm_category">Remastered music (KH Melon Mix)</string>
+diff --git a/app/src/main/res/xml/pref_video.xml b/app/src/main/res/xml/pref_video.xml
+index 82bd859..cf3c4f1 100644
+--- a/app/src/main/res/xml/pref_video.xml
++++ b/app/src/main/res/xml/pref_video.xml
+@@ -34,6 +34,18 @@
+             app:iconSpaceReserved="false"
+             android:defaultValue="true" />
+ 
++    <SeekBarPreference
++            android:key="kh_portrait_screen_position"
++            android:title="@string/kh_portrait_screen_position"
++            android:summary="@string/kh_portrait_screen_position_summary"
++            android:dependency="kh_single_screen_mode"
++            android:defaultValue="20"
++            android:max="50"
++            app:min="0"
++            app:seekBarIncrement="5"
++            app:showSeekBarValue="true"
++            app:iconSpaceReserved="false" />
++
+     <!-- [KHMM] read-only status row: whether the Days HD cutscene pack is installed and
+          where it belongs, mirroring the music-pack rows in the audio settings -->
+     <Preference
+@@ -70,4 +82,4 @@
+             android:entryValues="@array/fps_counter_position_values"
+             android:defaultValue="hidden" />
+ 
+-</PreferenceScreen>
+\ No newline at end of file
++</PreferenceScreen>
+-- 
+2.51.1
+
