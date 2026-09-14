@@ -22,6 +22,7 @@ on:
       - MelonMix-KH-Default-and-Scene-Controls-v13.patch
       - MelonMix-KH-Editable-Preset-and-Scene-Fades-v14.patch
       - MelonMix-KH-Adaptive-Backgrounds-and-Portrait-v15.patch
+      - MelonMix-KH-Adaptive-Backgrounds-v15-Hotfix.patch
 
 jobs:
   build:
@@ -214,6 +215,9 @@ jobs:
 
       - name: Add adaptive backgrounds and the portrait 4-by-3 viewport
         run: git apply MelonMix-KH-Adaptive-Backgrounds-and-Portrait-v15.patch
+
+      - name: Fix bundled background package lookup
+        run: git apply MelonMix-KH-Adaptive-Backgrounds-v15-Hotfix.patch
 
       - name: Give v20 its own app identity
         run: sed -i 's/applicationIdSuffix = ".dev"/applicationIdSuffix = ".adaptivekh"/' app/build.gradle.kts
