@@ -1,4 +1,4 @@
-name: KHDS Touch Remix 1.0 - Final Update Build
+name: KHDS Touch Remix 1.0.1 - Flex Mode Update
 
 on:
   workflow_dispatch:
@@ -26,6 +26,7 @@ on:
       - MelonMix-KH-Portrait-Viewport-Bias-v16.patch
       - MelonMix-KH-Adjustable-Portrait-Position-v17.patch
       - MelonMix-KH-Layout-Backup-v18.patch
+      - MelonMix-KH-Flex-Mode-v19.patch
 
 jobs:
   build:
@@ -231,10 +232,13 @@ jobs:
       - name: Reveal internal layout backup and restore
         run: git apply MelonMix-KH-Layout-Backup-v18.patch
 
+      - name: Add hinge-aware tabletop flex mode
+        run: git apply MelonMix-KH-Flex-Mode-v19.patch
+
       - name: Target the established adaptive Touch Remix installation
         run: |
           sed -i 's/applicationIdSuffix = ".dev"/applicationIdSuffix = ".adaptivekh"/' app/build.gradle.kts
-          sed -i 's/versionCode = AppConfig.versionCode/versionCode = AppConfig.versionCode + 1000/' app/build.gradle.kts
+          sed -i 's/versionCode = AppConfig.versionCode/versionCode = AppConfig.versionCode + 1001/' app/build.gradle.kts
 
       - name: Bake the adaptive KHDS Touch Remix APK
         run: |
@@ -244,7 +248,7 @@ jobs:
       - name: Package the APK for download
         uses: actions/upload-artifact@v4
         with:
-          name: KHDS-Touch-Remix-1.0-Final
+          name: KHDS-Touch-Remix-1.0.1-Flex-Mode
           path: app/build/outputs/apk/gitHubProd/debug/*.apk
           if-no-files-found: error
           retention-days: 7
