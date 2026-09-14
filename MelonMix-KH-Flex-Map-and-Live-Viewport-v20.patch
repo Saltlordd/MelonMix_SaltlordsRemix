@@ -1,0 +1,242 @@
+From 46747517fadf4519ab80625da2ae1f8afe61c01e Mon Sep 17 00:00:00 2001
+From: Codex <codex@example.invalid>
+Date: Mon, 14 Sep 2026 14:49:03 -0600
+Subject: [PATCH] Add KH flex transition and Map overlay polish
+
+---
+ .../domain/model/layout/LayoutComponent.kt    |  7 +++-
+ .../impl/layout/DefaultLayoutProvider.kt      |  2 +
+ .../SingleButtonLayoutComponentViewBuilder.kt |  2 +
+ .../melonds/ui/emulator/EmulatorActivity.kt   | 38 ++++++++++++++++++-
+ .../melonds/ui/emulator/RuntimeLayoutView.kt  |  4 ++
+ .../me/magnum/melonds/utils/InputUtils.kt     |  2 +
+ .../res/drawable/button_kh_hud_toggle.xml     | 11 ++++++
+ .../main/res/drawable/button_kh_map_navi.xml  | 21 ++++++++++
+ app/src/main/res/values/strings.xml           |  2 +
+ 9 files changed, 87 insertions(+), 2 deletions(-)
+ create mode 100644 app/src/main/res/drawable/button_kh_hud_toggle.xml
+ create mode 100644 app/src/main/res/drawable/button_kh_map_navi.xml
+
+diff --git a/app/src/main/java/me/magnum/melonds/domain/model/layout/LayoutComponent.kt b/app/src/main/java/me/magnum/melonds/domain/model/layout/LayoutComponent.kt
+index 2fd95f8..6039a88 100644
+--- a/app/src/main/java/me/magnum/melonds/domain/model/layout/LayoutComponent.kt
++++ b/app/src/main/java/me/magnum/melonds/domain/model/layout/LayoutComponent.kt
+@@ -31,7 +31,12 @@ enum class LayoutComponent(val matchingInputs: List<Input>) {
+     BUTTON_QUICK_SAVE(listOf(Input.QUICK_SAVE)),
+     BUTTON_QUICK_LOAD(listOf(Input.QUICK_LOAD)),
+     BUTTON_REWIND(listOf(Input.REWIND)),
+-    BUTTON_MICROPHONE_TOGGLE(listOf(Input.MICROPHONE));
++    BUTTON_MICROPHONE_TOGGLE(listOf(Input.MICROPHONE)),
++    // [KHMM v20] Keep new entries at the end so existing ordinal-based layout data remains
++    // readable. Both actions are resolved by name in the active KH plugin and are harmless
++    // for every other game.
++    BUTTON_KH_MAP_NAVI(listOf(Input.KH_FULLSCREEN_MAP_TOGGLE)),
++    BUTTON_KH_HUD_TOGGLE(listOf(Input.KH_HUD_TOGGLE));
+ 
+     fun isScreen(): Boolean {
+         return this == TOP_SCREEN || this == BOTTOM_SCREEN
+diff --git a/app/src/main/java/me/magnum/melonds/impl/layout/DefaultLayoutProvider.kt b/app/src/main/java/me/magnum/melonds/impl/layout/DefaultLayoutProvider.kt
+index 38d3334..21be4d9 100644
+--- a/app/src/main/java/me/magnum/melonds/impl/layout/DefaultLayoutProvider.kt
++++ b/app/src/main/java/me/magnum/melonds/impl/layout/DefaultLayoutProvider.kt
+@@ -53,6 +53,7 @@ class DefaultLayoutProvider(
+                 PositionedLayoutComponent(rect(0.72f, 0.52f, 0.075f, 0.085f), LayoutComponent.BUTTON_KH_JUMP, 0.75f),
+                 PositionedLayoutComponent(rect(0.84f, 0.50f, 0.11f, 0.13f), LayoutComponent.BUTTON_KH_ATTACK, 0.75f),
+                 PositionedLayoutComponent(rect(0.91f, 0.65f, 0.075f, 0.085f), LayoutComponent.BUTTON_KH_LOCK_ON, 0.75f),
++                PositionedLayoutComponent(rect(0.015f, 0.82f, 0.055f, 0.065f), LayoutComponent.BUTTON_KH_MAP_NAVI, 0.70f),
+                 PositionedLayoutComponent(rect(0.935f, 0.025f, 0.055f, 0.065f), LayoutComponent.BUTTON_KH_TOGGLE_CONTROLS, 0.85f),
+                 PositionedLayoutComponent(rect(0.015f, 0.92f, 0.055f, 0.065f), LayoutComponent.BUTTON_FAST_FORWARD_TOGGLE, 0.60f),
+                 PositionedLayoutComponent(rect(0.74f, 0.92f, 0.055f, 0.065f), LayoutComponent.BUTTON_L, 0.60f),
+@@ -71,6 +72,7 @@ class DefaultLayoutProvider(
+                 PositionedLayoutComponent(rect(0.64f, 0.68f, 0.12f, 0.065f), LayoutComponent.BUTTON_KH_JUMP, 0.75f),
+                 PositionedLayoutComponent(rect(0.78f, 0.66f, 0.18f, 0.10f), LayoutComponent.BUTTON_KH_ATTACK, 0.75f),
+                 PositionedLayoutComponent(rect(0.86f, 0.79f, 0.12f, 0.065f), LayoutComponent.BUTTON_KH_LOCK_ON, 0.75f),
++                PositionedLayoutComponent(rect(0.02f, 0.85f, 0.085f, 0.05f), LayoutComponent.BUTTON_KH_MAP_NAVI, 0.70f),
+                 PositionedLayoutComponent(rect(0.90f, 0.02f, 0.085f, 0.05f), LayoutComponent.BUTTON_KH_TOGGLE_CONTROLS, 0.85f),
+                 PositionedLayoutComponent(rect(0.02f, 0.93f, 0.085f, 0.05f), LayoutComponent.BUTTON_FAST_FORWARD_TOGGLE, 0.60f),
+                 PositionedLayoutComponent(rect(0.63f, 0.93f, 0.085f, 0.05f), LayoutComponent.BUTTON_L, 0.60f),
+diff --git a/app/src/main/java/me/magnum/melonds/ui/common/componentbuilders/SingleButtonLayoutComponentViewBuilder.kt b/app/src/main/java/me/magnum/melonds/ui/common/componentbuilders/SingleButtonLayoutComponentViewBuilder.kt
+index d3824d3..de4ec88 100644
+--- a/app/src/main/java/me/magnum/melonds/ui/common/componentbuilders/SingleButtonLayoutComponentViewBuilder.kt
++++ b/app/src/main/java/me/magnum/melonds/ui/common/componentbuilders/SingleButtonLayoutComponentViewBuilder.kt
+@@ -21,6 +21,8 @@ class SingleButtonLayoutComponentViewBuilder(private val layoutComponent: Layout
+             LayoutComponent.BUTTON_L -> R.drawable.button_l
+             LayoutComponent.BUTTON_R -> R.drawable.button_r
+             LayoutComponent.BUTTON_KH_LOCK_ON -> R.drawable.button_kh_lock_on
++            LayoutComponent.BUTTON_KH_MAP_NAVI -> R.drawable.button_kh_map_navi
++            LayoutComponent.BUTTON_KH_HUD_TOGGLE -> R.drawable.button_kh_hud_toggle
+             LayoutComponent.BUTTON_KH_TOGGLE_CONTROLS -> R.drawable.ic_touch_enabled
+             LayoutComponent.BUTTON_START -> R.drawable.button_start
+             LayoutComponent.BUTTON_SELECT -> R.drawable.button_select
+diff --git a/app/src/main/java/me/magnum/melonds/ui/emulator/EmulatorActivity.kt b/app/src/main/java/me/magnum/melonds/ui/emulator/EmulatorActivity.kt
+index ef0f5f3..32be635 100644
+--- a/app/src/main/java/me/magnum/melonds/ui/emulator/EmulatorActivity.kt
++++ b/app/src/main/java/me/magnum/melonds/ui/emulator/EmulatorActivity.kt
+@@ -174,6 +174,7 @@ class EmulatorActivity : AppCompatActivity() {
+     // e.g. dual-screen layouts with single-screen mode off)
+     private val khTopScreenRect = androidx.compose.runtime.mutableStateOf<me.magnum.melonds.domain.model.Rect?>(null)
+     private val khFlexMode = androidx.compose.runtime.mutableStateOf(false)
++    private var khFoldGeometrySignature: String? = null
+ 
+     private lateinit var handler: Handler
+     private val displayListener = object : DisplayManager.DisplayListener {
+@@ -392,6 +393,9 @@ class EmulatorActivity : AppCompatActivity() {
+                 KhCutscenePlayerUi(
+                     state = khCutsceneState.value,
+                     paused = khPauseMenuState.value != null || khEmulatorPaused.value,
++                    // A separating horizontal hinge is the authoritative Flex signal. Some
++                    // devices report FLAT while still separating, so gating this on HALF_OPENED
++                    // allowed HD video to escape back to the full window.
+                     viewportBounds = khTopScreenRect.value.takeIf { khFlexMode.value },
+                     onEnded = { MelonEmulator.onKhCutsceneEnded() },
+                     onFailed = { MelonEmulator.onKhCutsceneFailed(it) },
+@@ -657,7 +661,7 @@ class EmulatorActivity : AppCompatActivity() {
+                 WindowInfoTracker.getOrCreate(this@EmulatorActivity).windowLayoutInfo(this@EmulatorActivity).collect {
+                     khFlexMode.value = it.displayFeatures.any { feature ->
+                         feature is FoldingFeature &&
+-                            feature.state == FoldingFeature.State.HALF_OPENED &&
++                            feature.isSeparating &&
+                             feature.orientation == FoldingFeature.Orientation.HORIZONTAL
+                     }
+                     val folds = it.displayFeatures.mapNotNull {
+@@ -672,6 +676,13 @@ class EmulatorActivity : AppCompatActivity() {
+                         }
+                     }
+                     viewModel.setScreenFolds(folds)
++                    val foldGeometrySignature = folds.joinToString("|") { fold ->
++                        "${fold.orientation}:${fold.type}:${fold.foldBounds}"
++                    }
++                    if (foldGeometrySignature != khFoldGeometrySignature) {
++                        khFoldGeometrySignature = foldGeometrySignature
++                        rebuildKhCompositorViewport()
++                    }
+                 }
+             }
+         }
+@@ -919,6 +930,31 @@ class EmulatorActivity : AppCompatActivity() {
+         }
+     }
+ 
++    /**
++     * [KHMM v20] A fold posture can change without changing the Android window's outer width or
++     * height. In that case the ordinary OnLayoutChangeListener never runs, leaving both the
++     * renderer crop and the KH plugin's internal widescreen value at the previous posture.
++     * Rebuild the runtime layout, then sample it across consecutive UI frames: the first pass
++     * requests/recreates the hinge-derived viewport and the following passes reinject its final
++     * aspect into the native compositor after Android has committed the new child bounds.
++     */
++    private fun rebuildKhCompositorViewport() {
++        binding.viewLayoutControls.requestLayout()
++        binding.surfaceMain.requestLayout()
++
++        fun reinject(framesRemaining: Int) {
++            binding.viewLayoutControls.postOnAnimation {
++                updateRendererScreenAreas()
++                binding.surfaceMain.invalidate()
++                if (framesRemaining > 1) reinject(framesRemaining - 1)
++            }
++        }
++        reinject(3)
++        // UILayoutProvider deliberately debounces its multi-flow geometry update by 50 ms.
++        // This final pass lands after that transaction even on a 120 Hz Fold display.
++        binding.viewLayoutControls.postDelayed({ updateRendererScreenAreas() }, 90L)
++    }
++
+     private fun setupInputHandling(controllerConfiguration: ControllerConfiguration) {
+         nativeInputListener = InputProcessor(controllerConfiguration, melonTouchHandler, frontendInputHandler)
+     }
+diff --git a/app/src/main/java/me/magnum/melonds/ui/emulator/RuntimeLayoutView.kt b/app/src/main/java/me/magnum/melonds/ui/emulator/RuntimeLayoutView.kt
+index d20189a..f9ce902 100644
+--- a/app/src/main/java/me/magnum/melonds/ui/emulator/RuntimeLayoutView.kt
++++ b/app/src/main/java/me/magnum/melonds/ui/emulator/RuntimeLayoutView.kt
+@@ -182,6 +182,8 @@ class RuntimeLayoutView(context: Context, attrs: AttributeSet? = null) : LayoutV
+             getLayoutComponentView(LayoutComponent.BUTTON_L_SHORTCUT_TOGGLE)?.view?.setOnTouchListener(KhShortcutToggleInputHandler(it, enableHapticFeedback, touchVibrator))
+             getLayoutComponentView(LayoutComponent.BUTTON_R)?.view?.setOnTouchListener(SingleButtonInputHandler(it, Input.R, enableHapticFeedback, touchVibrator))
+             getLayoutComponentView(LayoutComponent.BUTTON_KH_LOCK_ON)?.view?.setOnTouchListener(SingleButtonInputHandler(it, Input.KH_LOCK_ON, enableHapticFeedback, touchVibrator))
++            getLayoutComponentView(LayoutComponent.BUTTON_KH_MAP_NAVI)?.view?.setOnTouchListener(SingleButtonInputHandler(it, Input.KH_FULLSCREEN_MAP_TOGGLE, enableHapticFeedback, touchVibrator))
++            getLayoutComponentView(LayoutComponent.BUTTON_KH_HUD_TOGGLE)?.view?.setOnTouchListener(SingleButtonInputHandler(it, Input.KH_HUD_TOGGLE, enableHapticFeedback, touchVibrator))
+             getLayoutComponentView(LayoutComponent.BUTTON_SELECT)?.view?.setOnTouchListener(SingleButtonInputHandler(it, Input.SELECT, enableHapticFeedback, touchVibrator))
+             getLayoutComponentView(LayoutComponent.BUTTON_START)?.view?.setOnTouchListener(SingleButtonInputHandler(it, Input.START, enableHapticFeedback, touchVibrator))
+             getLayoutComponentView(LayoutComponent.BUTTON_HINGE)?.view?.setOnTouchListener(SingleButtonInputHandler(it, Input.HINGE, enableHapticFeedback, touchVibrator))
+@@ -319,6 +321,8 @@ class RuntimeLayoutView(context: Context, attrs: AttributeSet? = null) : LayoutV
+             LayoutComponent.BUTTON_KH_GUARD,
+             LayoutComponent.BUTTON_KH_LOCK_ON,
+             LayoutComponent.BUTTON_L_SHORTCUT_TOGGLE,
++            LayoutComponent.BUTTON_KH_MAP_NAVI,
++            LayoutComponent.BUTTON_KH_HUD_TOGGLE,
+         )
+     }
+ }
+diff --git a/app/src/main/java/me/magnum/melonds/utils/InputUtils.kt b/app/src/main/java/me/magnum/melonds/utils/InputUtils.kt
+index 9245adc..3dc2633 100644
+--- a/app/src/main/java/me/magnum/melonds/utils/InputUtils.kt
++++ b/app/src/main/java/me/magnum/melonds/utils/InputUtils.kt
+@@ -20,6 +20,8 @@ fun getLayoutComponentName(layoutComponent: LayoutComponent): Int {
+         LayoutComponent.BUTTON_R -> R.string.input_r
+         LayoutComponent.BUTTON_KH_LOCK_ON -> R.string.input_kh_lock_on
+         LayoutComponent.BUTTON_KH_TOGGLE_CONTROLS -> R.string.input_kh_toggle_controls
++        LayoutComponent.BUTTON_KH_MAP_NAVI -> R.string.input_kh_map_navi
++        LayoutComponent.BUTTON_KH_HUD_TOGGLE -> R.string.input_kh_hud_overlay_toggle
+         LayoutComponent.KH_CAMERA_STICK -> R.string.input_kh_camera_stick
+         LayoutComponent.KH_CAMERA_SWIPE_ZONE -> R.string.input_kh_camera_swipe_zone
+         LayoutComponent.BUTTON_START -> R.string.input_start
+diff --git a/app/src/main/res/drawable/button_kh_hud_toggle.xml b/app/src/main/res/drawable/button_kh_hud_toggle.xml
+new file mode 100644
+index 0000000..d507c36
+--- /dev/null
++++ b/app/src/main/res/drawable/button_kh_hud_toggle.xml
+@@ -0,0 +1,11 @@
++<vector xmlns:android="http://schemas.android.com/apk/res/android"
++    android:width="48dp"
++    android:height="48dp"
++    android:viewportWidth="48"
++    android:viewportHeight="48">
++    <path android:fillColor="@android:color/transparent" android:strokeColor="#CCFFFFFF"
++        android:strokeWidth="3" android:pathData="M8,17 L8,9 L16,9 M32,9 L40,9 L40,17 M40,31 L40,39 L32,39 M16,39 L8,39 L8,31" />
++    <path android:fillColor="@android:color/transparent" android:strokeColor="#CCFFFFFF"
++        android:strokeWidth="2.5" android:pathData="M14,24 C19,17 29,17 34,24 C29,31 19,31 14,24" />
++    <path android:fillColor="#CCFFFFFF" android:pathData="M21,24 a3,3 0,1 0,6 0 a3,3 0,1 0,-6 0" />
++</vector>
+diff --git a/app/src/main/res/drawable/button_kh_map_navi.xml b/app/src/main/res/drawable/button_kh_map_navi.xml
+new file mode 100644
+index 0000000..d396e36
+--- /dev/null
++++ b/app/src/main/res/drawable/button_kh_map_navi.xml
+@@ -0,0 +1,21 @@
++<vector xmlns:android="http://schemas.android.com/apk/res/android"
++    android:width="48dp"
++    android:height="48dp"
++    android:viewportWidth="48"
++    android:viewportHeight="48">
++    <path
++        android:fillColor="@android:color/transparent"
++        android:strokeColor="#CCFFFFFF"
++        android:strokeLineCap="round"
++        android:strokeWidth="2.6"
++        android:pathData="M8,35 C12,28 13,19 21,18 C28,17 30,27 37,15" />
++    <path
++        android:fillColor="#CCFFFFFF"
++        android:pathData="M7,34 a2.2,2.2 0,1 0,0.1,0 M15,24 a1.7,1.7 0,1 0,0.1,0 M25,19 a1.7,1.7 0,1 0,0.1,0" />
++    <path
++        android:fillColor="@android:color/transparent"
++        android:strokeColor="#FFFFFFFF"
++        android:strokeLineCap="round"
++        android:strokeWidth="3.2"
++        android:pathData="M34,9 L42,17 M42,9 L34,17" />
++</vector>
+diff --git a/app/src/main/res/values/strings.xml b/app/src/main/res/values/strings.xml
+index 972ace4..9120096 100644
+--- a/app/src/main/res/values/strings.xml
++++ b/app/src/main/res/values/strings.xml
+@@ -317,6 +317,8 @@
+     <string name="kh_movement_swipe_travel">Movement joystick travel</string>
+     <string name="kh_movement_swipe_travel_summary">Summoned movement joystick radius, independent of its touch-zone size (dp)</string>
+     <string name="input_kh_toggle_controls">KH Days + Re:coded: Hide controls</string>
++    <string name="input_kh_map_navi">KH Days + Re:coded: Map / Navi</string>
++    <string name="input_kh_hud_overlay_toggle">KH Days + Re:coded: In-game HUD toggle</string>
+     <string name="retroachievements">RetroAchievements</string> <!-- Keep words together because this is the official name -->
+     <string name="retroachievements_summary">Login &amp; manage RetroAchievements integration</string> <!-- Keep words together because this is the official name -->
+     <string name="enable_rich_presence">Enable rich presence</string>
+-- 
+2.51.1
+
