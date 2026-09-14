@@ -1,0 +1,45 @@
+From 7b880d7c4f88b0a274e4101c2c0d94dae5cf62f2 Mon Sep 17 00:00:00 2001
+From: Codex <codex@example.invalid>
+Date: Sun, 13 Sep 2026 23:48:21 -0400
+Subject: [PATCH] Fix bundled background resource package lookup
+
+---
+ .../java/me/magnum/melonds/ui/emulator/EmulatorViewModel.kt | 6 ++++--
+ 1 file changed, 4 insertions(+), 2 deletions(-)
+
+diff --git a/app/src/main/java/me/magnum/melonds/ui/emulator/EmulatorViewModel.kt b/app/src/main/java/me/magnum/melonds/ui/emulator/EmulatorViewModel.kt
+index c9adb9f..c307e3a 100644
+--- a/app/src/main/java/me/magnum/melonds/ui/emulator/EmulatorViewModel.kt
++++ b/app/src/main/java/me/magnum/melonds/ui/emulator/EmulatorViewModel.kt
+@@ -1,12 +1,13 @@
+ package me.magnum.melonds.ui.emulator
+ 
++import android.content.Context
+ import android.net.Uri
+ import android.util.Log
+ import androidx.lifecycle.SavedStateHandle
+ import androidx.lifecycle.ViewModel
+ import androidx.lifecycle.viewModelScope
+ import dagger.hilt.android.lifecycle.HiltViewModel
+-import me.magnum.melonds.BuildConfig
++import dagger.hilt.android.qualifiers.ApplicationContext
+ import me.magnum.melonds.R
+ import kotlinx.coroutines.CoroutineScope
+ import kotlinx.coroutines.Dispatchers
+@@ -107,6 +108,7 @@ import kotlin.time.Duration.Companion.seconds
+ @OptIn(ExperimentalCoroutinesApi::class)
+ @HiltViewModel
+ class EmulatorViewModel @Inject constructor(
++    @ApplicationContext private val context: Context,
+     private val settingsRepository: SettingsRepository,
+     private val romsRepository: RomsRepository,
+     private val cheatsRepository: CheatsRepository,
+@@ -918,7 +920,7 @@ class EmulatorViewModel @Inject constructor(
+             portrait -> R.drawable.kh_bg_folded_portrait
+             else -> R.drawable.kh_bg_folded_landscape
+         }
+-        val uri = Uri.parse("android.resource://${BuildConfig.APPLICATION_ID}/$drawableId")
++        val uri = Uri.parse("android.resource://${context.packageName}/$drawableId")
+         return RuntimeBackground(Background(null, "KHDS: TOUCH REMIX", uri), BackgroundMode.FILL_CENTER)
+     }
+ 
