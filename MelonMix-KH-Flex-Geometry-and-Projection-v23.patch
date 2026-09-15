@@ -1,0 +1,80 @@
+From 0000000000000000000000000000000000000023 Mon Sep 17 00:00:00 2001
+From: Codex <codex@example.invalid>
+Date: Tue, 15 Sep 2026 17:15:00 +1000
+Subject: [PATCH] Derive Flex video bounds from layout and bootstrap projection
+
+---
+ .../melonds/ui/emulator/EmulatorActivity.kt | 19 +++++++++++++++++--
+ melonDS-android-lib/src/plugins/Plugin.cpp  |  6 ++++--
+ melonDS-android-lib/src/plugins/Plugin.h    |  1 +
+ 3 files changed, 22 insertions(+), 4 deletions(-)
+
+diff --git a/app/src/main/java/me/magnum/melonds/ui/emulator/EmulatorActivity.kt b/app/src/main/java/me/magnum/melonds/ui/emulator/EmulatorActivity.kt
+--- a/app/src/main/java/me/magnum/melonds/ui/emulator/EmulatorActivity.kt
++++ b/app/src/main/java/me/magnum/melonds/ui/emulator/EmulatorActivity.kt
+@@ -178,5 +178,9 @@ class EmulatorActivity : AppCompatActivity() {
+     // not a reliable clipping rectangle for the Compose video overlay.
+     private val khFlexUpperPanelRect = androidx.compose.runtime.mutableStateOf<me.magnum.melonds.domain.model.Rect?>(null)
++    // [KHMM v23] The finished layout is the authoritative Flex signal for video. Vendor fold
++    // posture can arrive before or after the layout transaction and was inverted on some devices.
++    private val khCinematicViewportRect =
++        androidx.compose.runtime.mutableStateOf<me.magnum.melonds.domain.model.Rect?>(null)
+     private var khFoldGeometrySignature: String? = null
+     private var khObservedTopScreenView: View? = null
+     private val khTopScreenGeometryListener = View.OnLayoutChangeListener { _, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom ->
+@@ -410,7 +414,7 @@ class EmulatorActivity : AppCompatActivity() {
+                     // [KHMM v22] Always bind cinematics to the actual enhanced-game viewport.
+                     // This is already the authoritative result of the fold/layout pipeline and
+                     // avoids a second posture detector disagreeing with Samsung Flex Mode.
+-                    viewportBounds = khTopScreenRect.value,
++                    viewportBounds = khCinematicViewportRect.value,
+                     onEnded = { MelonEmulator.onKhCutsceneEnded() },
+                     onFailed = { MelonEmulator.onKhCutsceneFailed(it) },
+                 )
+@@ -928,6 +932,18 @@ class EmulatorActivity : AppCompatActivity() {
+         // [KHMM] the pause-menu overlay anchors to the top-screen viewport
+         khTopScreenRect.value = topView?.getRect()
+ 
++        // A tabletop layout occupies essentially the full width but only the upper half of a
++        // landscape window. Use that committed rectangle for video; null preserves the original
++        // centered full-window cinematic behavior in ordinary landscape and portrait layouts.
++        khCinematicViewportRect.value = topView?.getRect()?.takeIf { rect ->
++            val rootWidth = binding.layoutRoot.width
++            val rootHeight = binding.layoutRoot.height
++            rootWidth > 0 && rootHeight > 0 && rootWidth >= rootHeight &&
++                rect.width >= (rootWidth * 0.90f).toInt() &&
++                rect.height <= (rootHeight * 0.65f).toInt() &&
++                rect.y <= (rootHeight * 0.15f).toInt()
++        }
++
+         if (topView?.view !== khObservedTopScreenView) {
+             observeKhTopScreenGeometry()
+         }
+diff --git a/melonDS-android-lib/src/plugins/Plugin.cpp b/melonDS-android-lib/src/plugins/Plugin.cpp
+--- a/melonDS-android-lib/src/plugins/Plugin.cpp
++++ b/melonDS-android-lib/src/plugins/Plugin.cpp
+@@ -1483,10 +1483,12 @@ void Plugin::setAspectRatio(float aspectRatio)
+             // the first write, every later fold/rotation update was therefore rejected and
+             // the 3D projection stretched to the new Android viewport. Accept our own last
+             // value as well, while still preserving any unrelated value written by the game.
+-            if (currentAspectRatioKey == 0x1555 || currentAspectRatioKey == LastWrittenAspectRatioKey)
++            if (!HasWrittenAspectRatioKey || currentAspectRatioKey == 0x1555 ||
++                currentAspectRatioKey == LastWrittenAspectRatioKey)
+             {
+                 nds->ARM7Write16(aspectRatioMenuAddress, aspectRatioKey);
+                 LastWrittenAspectRatioKey = static_cast<u16>(aspectRatioKey);
++                HasWrittenAspectRatioKey = true;
+             }
+         }
+     }
+diff --git a/melonDS-android-lib/src/plugins/Plugin.h b/melonDS-android-lib/src/plugins/Plugin.h
+--- a/melonDS-android-lib/src/plugins/Plugin.h
++++ b/melonDS-android-lib/src/plugins/Plugin.h
+@@ -491,6 +491,7 @@ protected:
+     // update our own value again, but must not overwrite a value changed independently by the
+     // game. The stock sentinel is 0x1555 (4:3).
+     u16 LastWrittenAspectRatioKey = 0x1555;
++    bool HasWrittenAspectRatioKey = false;
+     int PriorGameScene = -1;
+     int GameScene = -1;
+     int GameSceneState = -1;
