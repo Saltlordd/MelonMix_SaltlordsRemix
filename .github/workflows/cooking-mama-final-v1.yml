@@ -1,4 +1,4 @@
-name: KHDS Touch Remix 1.0.2 - Flex Map and Live Viewport Update
+name: KHDS Touch Remix 1.0.3 - Flex Viewport Fix
 
 on:
   workflow_dispatch:
@@ -28,6 +28,7 @@ on:
       - MelonMix-KH-Layout-Backup-v18.patch
       - MelonMix-KH-Flex-Mode-v19.patch
       - MelonMix-KH-Flex-Map-and-Live-Viewport-v20.patch
+      - MelonMix-KH-Flex-Viewport-Fix-v21.patch
 
 jobs:
   build:
@@ -44,6 +45,25 @@ jobs:
           java-version: "21"
           distribution: zulu
           cache: gradle
+
+      - name: Restore permanent KHDS signing identity
+        env:
+          KHDS_KEYSTORE_BASE64: ${{ secrets.KHDS_KEYSTORE_BASE64 }}
+          KHDS_KEYSTORE_PASSWORD: ${{ secrets.KHDS_KEYSTORE_PASSWORD }}
+          KHDS_KEY_ALIAS: ${{ secrets.KHDS_KEY_ALIAS }}
+          KHDS_KEY_PASSWORD: ${{ secrets.KHDS_KEY_PASSWORD }}
+        run: |
+          test -n "$KHDS_KEYSTORE_BASE64" || { echo "Missing KHDS_KEYSTORE_BASE64 repository secret"; exit 1; }
+          test -n "$KHDS_KEYSTORE_PASSWORD" || { echo "Missing KHDS_KEYSTORE_PASSWORD repository secret"; exit 1; }
+          test -n "$KHDS_KEY_ALIAS" || { echo "Missing KHDS_KEY_ALIAS repository secret"; exit 1; }
+          test -n "$KHDS_KEY_PASSWORD" || { echo "Missing KHDS_KEY_PASSWORD repository secret"; exit 1; }
+          printf '%s' "$KHDS_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/khds-touch-remix.jks"
+          {
+            echo "MELONDS_KEYSTORE=$RUNNER_TEMP/khds-touch-remix.jks"
+            echo "MELONDS_KEYSTORE_PASSWORD=$KHDS_KEYSTORE_PASSWORD"
+            echo "MELONDS_KEY_ALIAS=$KHDS_KEY_ALIAS"
+            echo "MELONDS_KEY_PASSWORD=$KHDS_KEY_PASSWORD"
+          } >> local.properties
 
       - name: Add Lock On
         run: git apply MelonMix-KH-Lock-On-touch-v1.patch
@@ -239,10 +259,14 @@ jobs:
       - name: Add flex cutscene map and live viewport fixes
         run: git apply MelonMix-KH-Flex-Map-and-Live-Viewport-v20.patch
 
+      - name: Fix Flex video panel and live aspect refresh
+        run: git apply MelonMix-KH-Flex-Viewport-Fix-v21.patch
+
       - name: Target the established adaptive Touch Remix installation
         run: |
           sed -i 's/applicationIdSuffix = ".dev"/applicationIdSuffix = ".adaptivekh"/' app/build.gradle.kts
-          sed -i 's/versionCode = AppConfig.versionCode/versionCode = AppConfig.versionCode + 1002/' app/build.gradle.kts
+          sed -i 's/versionCode = AppConfig.versionCode/versionCode = AppConfig.versionCode + 1003/' app/build.gradle.kts
+          sed -i '/getByName("debug") {/a\            signingConfig = signingConfigs.getByName("release")' app/build.gradle.kts
 
       - name: Bake the adaptive KHDS Touch Remix APK
         run: |
@@ -252,7 +276,7 @@ jobs:
       - name: Package the APK for download
         uses: actions/upload-artifact@v4
         with:
-          name: KHDS-Touch-Remix-1.0.2-Flex-Map-Live-Viewport
+          name: KHDS-Touch-Remix-1.0.3-Flex-Viewport-Fix
           path: app/build/outputs/apk/gitHubProd/debug/*.apk
           if-no-files-found: error
           retention-days: 7
