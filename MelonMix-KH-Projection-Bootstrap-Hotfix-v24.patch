@@ -1,0 +1,37 @@
+From 0000000000000000000000000000000000000024 Mon Sep 17 00:00:00 2001
+From: Codex <codex@example.invalid>
+Date: Tue, 15 Sep 2026 17:45:00 +1000
+Subject: [PATCH] Revert unsafe KH projection bootstrap write
+
+The first aspect callback can occur before a valid game viewport exists.  Never
+write that provisional value into KH memory; restore the guarded ownership rule
+while retaining v23's layout-derived cinematic bounds.
+
+diff --git a/melonDS-android-lib/src/plugins/Plugin.cpp b/melonDS-android-lib/src/plugins/Plugin.cpp
+--- a/melonDS-android-lib/src/plugins/Plugin.cpp
++++ b/melonDS-android-lib/src/plugins/Plugin.cpp
+@@ -1483,12 +1483,10 @@ void Plugin::setAspectRatio(float aspectRatio)
+             // the first write, every later fold/rotation update was therefore rejected and
+             // the 3D projection stretched to the new Android viewport. Accept our own last
+             // value as well, while still preserving any unrelated value written by the game.
+-            if (!HasWrittenAspectRatioKey || currentAspectRatioKey == 0x1555 ||
+-                currentAspectRatioKey == LastWrittenAspectRatioKey)
++            if (currentAspectRatioKey == 0x1555 || currentAspectRatioKey == LastWrittenAspectRatioKey)
+             {
+                 nds->ARM7Write16(aspectRatioMenuAddress, aspectRatioKey);
+                 LastWrittenAspectRatioKey = static_cast<u16>(aspectRatioKey);
+-                HasWrittenAspectRatioKey = true;
+             }
+         }
+     }
+diff --git a/melonDS-android-lib/src/plugins/Plugin.h b/melonDS-android-lib/src/plugins/Plugin.h
+--- a/melonDS-android-lib/src/plugins/Plugin.h
++++ b/melonDS-android-lib/src/plugins/Plugin.h
+@@ -491,7 +491,6 @@ protected:
+     // update our own value again, but must not overwrite a value changed independently by the
+     // game. The stock sentinel is 0x1555 (4:3).
+     u16 LastWrittenAspectRatioKey = 0x1555;
+-    bool HasWrittenAspectRatioKey = false;
+     int PriorGameScene = -1;
+     int GameScene = -1;
+     int GameSceneState = -1;
