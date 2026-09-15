@@ -1,0 +1,105 @@
+From b2740a4c743d7b625bfd624423df409a6f3ffc1a Mon Sep 17 00:00:00 2001
+From: Codex <codex@example.invalid>
+Date: Tue, 15 Sep 2026 14:41:36 +1000
+Subject: [PATCH] Fix KH flex video bounds and live aspect refresh
+
+---
+ .../melonds/ui/emulator/EmulatorActivity.kt   | 42 ++++++++++++++++++-
+ 1 file changed, 40 insertions(+), 2 deletions(-)
+
+diff --git a/app/src/main/java/me/magnum/melonds/ui/emulator/EmulatorActivity.kt b/app/src/main/java/me/magnum/melonds/ui/emulator/EmulatorActivity.kt
+index 32be635..ff39e9a 100644
+--- a/app/src/main/java/me/magnum/melonds/ui/emulator/EmulatorActivity.kt
++++ b/app/src/main/java/me/magnum/melonds/ui/emulator/EmulatorActivity.kt
+@@ -174,7 +174,18 @@ class EmulatorActivity : AppCompatActivity() {
+     // e.g. dual-screen layouts with single-screen mode off)
+     private val khTopScreenRect = androidx.compose.runtime.mutableStateOf<me.magnum.melonds.domain.model.Rect?>(null)
+     private val khFlexMode = androidx.compose.runtime.mutableStateOf(false)
++    // [KHMM v21] Window-relative upper panel derived directly from the separating hinge.
++    // The editable screen view is layout-relative and can lag a posture transaction, so it is
++    // not a reliable clipping rectangle for the Compose video overlay.
++    private val khFlexUpperPanelRect = androidx.compose.runtime.mutableStateOf<me.magnum.melonds.domain.model.Rect?>(null)
+     private var khFoldGeometrySignature: String? = null
++    private var khObservedTopScreenView: View? = null
++    private val khTopScreenGeometryListener = View.OnLayoutChangeListener { _, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom ->
++        if (left != oldLeft || top != oldTop || right != oldRight || bottom != oldBottom) {
++            // Run after this child and its parent have both committed their new geometry.
++            binding.viewLayoutControls.post { updateRendererScreenAreas() }
++        }
++    }
+ 
+     private lateinit var handler: Handler
+     private val displayListener = object : DisplayManager.DisplayListener {
+@@ -396,7 +407,7 @@ class EmulatorActivity : AppCompatActivity() {
+                     // A separating horizontal hinge is the authoritative Flex signal. Some
+                     // devices report FLAT while still separating, so gating this on HALF_OPENED
+                     // allowed HD video to escape back to the full window.
+-                    viewportBounds = khTopScreenRect.value.takeIf { khFlexMode.value },
++                    viewportBounds = khFlexUpperPanelRect.value.takeIf { khFlexMode.value },
+                     onEnded = { MelonEmulator.onKhCutsceneEnded() },
+                     onFailed = { MelonEmulator.onKhCutsceneFailed(it) },
+                 )
+@@ -659,11 +670,15 @@ class EmulatorActivity : AppCompatActivity() {
+         lifecycleScope.launch {
+             lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+                 WindowInfoTracker.getOrCreate(this@EmulatorActivity).windowLayoutInfo(this@EmulatorActivity).collect {
+-                    khFlexMode.value = it.displayFeatures.any { feature ->
++                    val separatingHorizontalHinge = it.displayFeatures.filterIsInstance<FoldingFeature>().firstOrNull { feature ->
+                         feature is FoldingFeature &&
+                             feature.isSeparating &&
+                             feature.orientation == FoldingFeature.Orientation.HORIZONTAL
+                     }
++                    khFlexMode.value = separatingHorizontalHinge != null
++                    khFlexUpperPanelRect.value = separatingHorizontalHinge?.let { hinge ->
++                        Rect(0, 0, binding.layoutRoot.width.coerceAtLeast(hinge.bounds.right), hinge.bounds.top)
++                    }
+                     val folds = it.displayFeatures.mapNotNull {
+                         if (it is FoldingFeature) {
+                             ScreenFold(
+@@ -870,6 +885,7 @@ class EmulatorActivity : AppCompatActivity() {
+                 setLayoutComponentToggleState(LayoutComponent.BUTTON_FAST_FORWARD_TOGGLE, frontendInputHandler.fastForwardEnabled)
+                 setLayoutComponentToggleState(LayoutComponent.BUTTON_MICROPHONE_TOGGLE, frontendInputHandler.microphoneEnabled)
+             }
++            observeKhTopScreenGeometry()
+             handler.post {
+                 updateRendererScreenAreas()
+             }
+@@ -912,6 +928,10 @@ class EmulatorActivity : AppCompatActivity() {
+         // [KHMM] the pause-menu overlay anchors to the top-screen viewport
+         khTopScreenRect.value = topView?.getRect()
+ 
++        if (topView?.view !== khObservedTopScreenView) {
++            observeKhTopScreenGeometry()
++        }
++
+         // [KHMM] tell the enhanced-graphics plugin the real aspect ratio of the on-screen
+         // top-screen viewport (its composite is built for exactly this aspect). Pushed on
+         // every layout change; the native side ignores it when the plugin is inactive.
+@@ -930,6 +950,24 @@ class EmulatorActivity : AppCompatActivity() {
+         }
+     }
+ 
++    /**
++     * [KHMM v21] Observe the actual enhanced-screen child. Fold posture and rotation can change
++     * its rectangle after the full-window RuntimeLayoutView has already finished laying out;
++     * listening only to the parent therefore reinjected the old aspect and stretched 3D.
++     */
++    private fun observeKhTopScreenGeometry() {
++        val topScreen = if (binding.viewLayoutControls.areScreensSwapped()) {
++            LayoutComponent.BOTTOM_SCREEN
++        } else {
++            LayoutComponent.TOP_SCREEN
++        }
++        val newView = binding.viewLayoutControls.getLayoutComponentView(topScreen)?.view
++        if (newView === khObservedTopScreenView) return
++        khObservedTopScreenView?.removeOnLayoutChangeListener(khTopScreenGeometryListener)
++        khObservedTopScreenView = newView
++        newView?.addOnLayoutChangeListener(khTopScreenGeometryListener)
++    }
++
+     /**
+      * [KHMM v20] A fold posture can change without changing the Android window's outer width or
+      * height. In that case the ordinary OnLayoutChangeListener never runs, leaving both the
+-- 
+2.51.1
+
