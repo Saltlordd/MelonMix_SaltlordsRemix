@@ -37,6 +37,7 @@ on:
       - MelonMix-KH-Flex-Authoritative-Viewport-v27.patch
       - MelonMix-KH-ReCoded-White-Screen-and-Portrait-Position-v28.patch
       - MelonMix-KH-Display-Profile-Stabilisation-v29.patch
+      - MelonMix-KH-Display-Profile-Compiler-Hotfix-v30.patch
 
 jobs:
   build:
@@ -293,6 +294,9 @@ jobs:
 
       - name: Stabilise launch profiles and restore safe Re:Coded region handling
         run: git apply MelonMix-KH-Display-Profile-Stabilisation-v29.patch
+
+      - name: Restore configuration screen context after Flex cleanup
+        run: git apply MelonMix-KH-Display-Profile-Compiler-Hotfix-v30.patch
 
       - name: Target the established adaptive Touch Remix installation
         run: |
