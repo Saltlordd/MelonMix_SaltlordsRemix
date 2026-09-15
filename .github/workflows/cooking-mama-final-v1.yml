@@ -1,4 +1,4 @@
-name: KHDS Touch Remix 1.0.6 - Projection Safety Hotfix
+name: KHDS Touch Remix 1.0.7 - Launch Display Profiles
 
 on:
   workflow_dispatch:
@@ -32,6 +32,8 @@ on:
       - MelonMix-KH-Live-Projection-and-Flex-Video-v22.patch
       - MelonMix-KH-Flex-Geometry-and-Projection-v23.patch
       - MelonMix-KH-Projection-Bootstrap-Hotfix-v24.patch
+      - MelonMix-KH-Launch-Display-Profiles-v25.patch
+      - MelonMix-KH-Launch-Profiles-Compiler-Hotfix-v26.patch
 
 jobs:
   build:
@@ -274,10 +276,16 @@ jobs:
       - name: Prevent provisional projection writes from blanking KH graphics
         run: git apply MelonMix-KH-Projection-Bootstrap-Hotfix-v24.patch
 
+      - name: Add per-game launch display profiles and safe Flex presentation
+        run: git apply MelonMix-KH-Launch-Display-Profiles-v25.patch
+
+      - name: Fix launch-profile warning resource compilation
+        run: git apply MelonMix-KH-Launch-Profiles-Compiler-Hotfix-v26.patch
+
       - name: Target the established adaptive Touch Remix installation
         run: |
           sed -i 's/applicationIdSuffix = ".dev"/applicationIdSuffix = ".adaptivekh"/' app/build.gradle.kts
-          sed -i 's/versionCode = AppConfig.versionCode/versionCode = AppConfig.versionCode + 1006/' app/build.gradle.kts
+          sed -i 's/versionCode = AppConfig.versionCode/versionCode = AppConfig.versionCode + 1007/' app/build.gradle.kts
           sed -i '/getByName("debug") {/a\            signingConfig = signingConfigs.getByName("release")' app/build.gradle.kts
 
       - name: Bake the adaptive KHDS Touch Remix APK
@@ -288,7 +296,7 @@ jobs:
       - name: Package the APK for download
         uses: actions/upload-artifact@v4
         with:
-          name: KHDS-Touch-Remix-1.0.6-Projection-Safety-Hotfix
+          name: KHDS-Touch-Remix-1.0.7-Launch-Display-Profiles
           path: app/build/outputs/apk/gitHubProd/debug/*.apk
           if-no-files-found: error
           retention-days: 7
