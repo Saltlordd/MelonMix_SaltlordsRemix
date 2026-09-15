@@ -1,0 +1,77 @@
+From bd18a36b9041ae18a8d2cf9b666502b1e3e05236 Mon Sep 17 00:00:00 2001
+From: Codex <codex@example.invalid>
+Date: Tue, 15 Sep 2026 15:39:43 +1000
+Subject: [PATCH] Bind KH videos to game viewport and refresh projection aspect
+
+---
+ .../melonds/ui/emulator/EmulatorActivity.kt      |  5 ++++-
+ melonDS-android-lib/src/plugins/Plugin.cpp       | 16 +++++++++++++---
+ melonDS-android-lib/src/plugins/Plugin.h         |  4 ++++
+ 3 files changed, 21 insertions(+), 4 deletions(-)
+
+diff --git a/app/src/main/java/me/magnum/melonds/ui/emulator/EmulatorActivity.kt b/app/src/main/java/me/magnum/melonds/ui/emulator/EmulatorActivity.kt
+index ff39e9a..4b5d634 100644
+--- a/app/src/main/java/me/magnum/melonds/ui/emulator/EmulatorActivity.kt
++++ b/app/src/main/java/me/magnum/melonds/ui/emulator/EmulatorActivity.kt
+@@ -407,7 +407,10 @@ class EmulatorActivity : AppCompatActivity() {
+                     // A separating horizontal hinge is the authoritative Flex signal. Some
+                     // devices report FLAT while still separating, so gating this on HALF_OPENED
+                     // allowed HD video to escape back to the full window.
+-                    viewportBounds = khFlexUpperPanelRect.value.takeIf { khFlexMode.value },
++                    // [KHMM v22] Always bind cinematics to the actual enhanced-game viewport.
++                    // This is already the authoritative result of the fold/layout pipeline and
++                    // avoids a second posture detector disagreeing with Samsung Flex Mode.
++                    viewportBounds = khTopScreenRect.value,
+                     onEnded = { MelonEmulator.onKhCutsceneEnded() },
+                     onFailed = { MelonEmulator.onKhCutsceneFailed(it) },
+                 )
+diff --git a/melonDS-android-lib/src/plugins/Plugin.cpp b/melonDS-android-lib/src/plugins/Plugin.cpp
+index f5c642d..53c7f9f 100644
+--- a/melonDS-android-lib/src/plugins/Plugin.cpp
++++ b/melonDS-android-lib/src/plugins/Plugin.cpp
+@@ -1476,8 +1476,18 @@ void Plugin::setAspectRatio(float aspectRatio)
+ 
+         u32 aspectRatioMenuAddress = getAspectRatioAddress();
+ 
+-        if (aspectRatioMenuAddress != 0 && nds->ARM7Read16(aspectRatioMenuAddress) == 0x00001555) {
+-            nds->ARM7Write16(aspectRatioMenuAddress, aspectRatioKey);
++        if (aspectRatioMenuAddress != 0)
++        {
++            const u16 currentAspectRatioKey = nds->ARM7Read16(aspectRatioMenuAddress);
++            // The previous implementation accepted only the untouched 4:3 sentinel. After
++            // the first write, every later fold/rotation update was therefore rejected and
++            // the 3D projection stretched to the new Android viewport. Accept our own last
++            // value as well, while still preserving any unrelated value written by the game.
++            if (currentAspectRatioKey == 0x1555 || currentAspectRatioKey == LastWrittenAspectRatioKey)
++            {
++                nds->ARM7Write16(aspectRatioMenuAddress, aspectRatioKey);
++                LastWrittenAspectRatioKey = static_cast<u16>(aspectRatioKey);
++            }
+         }
+     }
+ 
+@@ -1678,4 +1688,4 @@ void Plugin::ramSearch(melonDS::NDS* nds, u32 HotkeyPress) {
+     }
+ }
+ 
+-}
+\ No newline at end of file
++}
+diff --git a/melonDS-android-lib/src/plugins/Plugin.h b/melonDS-android-lib/src/plugins/Plugin.h
+index 7a120d0..19d33b2 100644
+--- a/melonDS-android-lib/src/plugins/Plugin.h
++++ b/melonDS-android-lib/src/plugins/Plugin.h
+@@ -487,6 +487,10 @@ protected:
+ 
+     int InternalResolutionScale = 1;
+     float AspectRatio = 0;
++    // [KHMM v22] Last aspect key written into game memory. Live window/fold transitions may
++    // update our own value again, but must not overwrite a value changed independently by the
++    // game. The stock sentinel is 0x1555 (4:3).
++    u16 LastWrittenAspectRatioKey = 0x1555;
+     int PriorGameScene = -1;
+     int GameScene = -1;
+     int GameSceneState = -1;
+-- 
+2.51.1
+
