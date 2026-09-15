@@ -1,4 +1,4 @@
-name: KHDS Touch Remix 1.0.3 - Flex Viewport Fix
+name: KHDS Touch Remix 1.0.4 - Live Projection and Flex Video Fix
 
 on:
   workflow_dispatch:
@@ -29,6 +29,7 @@ on:
       - MelonMix-KH-Flex-Mode-v19.patch
       - MelonMix-KH-Flex-Map-and-Live-Viewport-v20.patch
       - MelonMix-KH-Flex-Viewport-Fix-v21.patch
+      - MelonMix-KH-Live-Projection-and-Flex-Video-v22.patch
 
 jobs:
   build:
@@ -262,10 +263,13 @@ jobs:
       - name: Fix Flex video panel and live aspect refresh
         run: git apply MelonMix-KH-Flex-Viewport-Fix-v21.patch
 
+      - name: Bind Flex video and refresh the native KH projection
+        run: git apply MelonMix-KH-Live-Projection-and-Flex-Video-v22.patch
+
       - name: Target the established adaptive Touch Remix installation
         run: |
           sed -i 's/applicationIdSuffix = ".dev"/applicationIdSuffix = ".adaptivekh"/' app/build.gradle.kts
-          sed -i 's/versionCode = AppConfig.versionCode/versionCode = AppConfig.versionCode + 1003/' app/build.gradle.kts
+          sed -i 's/versionCode = AppConfig.versionCode/versionCode = AppConfig.versionCode + 1004/' app/build.gradle.kts
           sed -i '/getByName("debug") {/a\            signingConfig = signingConfigs.getByName("release")' app/build.gradle.kts
 
       - name: Bake the adaptive KHDS Touch Remix APK
@@ -276,7 +280,7 @@ jobs:
       - name: Package the APK for download
         uses: actions/upload-artifact@v4
         with:
-          name: KHDS-Touch-Remix-1.0.3-Flex-Viewport-Fix
+          name: KHDS-Touch-Remix-1.0.4-Live-Projection-Flex-Video-Fix
           path: app/build/outputs/apk/gitHubProd/debug/*.apk
           if-no-files-found: error
           retention-days: 7
