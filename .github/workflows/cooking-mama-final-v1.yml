@@ -1,4 +1,4 @@
-name: KHDS Touch Remix 1.0.7 - Launch Display Profiles
+name: KHDS Touch Remix 1.0.8 - Display Profile Stabilisation
 
 on:
   workflow_dispatch:
@@ -36,6 +36,7 @@ on:
       - MelonMix-KH-Launch-Profiles-Compiler-Hotfix-v26.patch
       - MelonMix-KH-Flex-Authoritative-Viewport-v27.patch
       - MelonMix-KH-ReCoded-White-Screen-and-Portrait-Position-v28.patch
+      - MelonMix-KH-Display-Profile-Stabilisation-v29.patch
 
 jobs:
   build:
@@ -290,10 +291,13 @@ jobs:
       - name: Fix Re:Coded white screen and retain portrait position
         run: git apply MelonMix-KH-ReCoded-White-Screen-and-Portrait-Position-v28.patch
 
+      - name: Stabilise launch profiles and restore safe Re:Coded region handling
+        run: git apply MelonMix-KH-Display-Profile-Stabilisation-v29.patch
+
       - name: Target the established adaptive Touch Remix installation
         run: |
           sed -i 's/applicationIdSuffix = ".dev"/applicationIdSuffix = ".adaptivekh"/' app/build.gradle.kts
-          sed -i 's/versionCode = AppConfig.versionCode/versionCode = AppConfig.versionCode + 1007/' app/build.gradle.kts
+          sed -i 's/versionCode = AppConfig.versionCode/versionCode = AppConfig.versionCode + 1008/' app/build.gradle.kts
           sed -i '/getByName("debug") {/a\            signingConfig = signingConfigs.getByName("release")' app/build.gradle.kts
 
       - name: Bake the adaptive KHDS Touch Remix APK
@@ -304,7 +308,7 @@ jobs:
       - name: Package the APK for download
         uses: actions/upload-artifact@v4
         with:
-          name: KHDS-Touch-Remix-1.0.7-Launch-Display-Profiles
+          name: KHDS-Touch-Remix-1.0.8-Display-Profile-Stabilisation
           path: app/build/outputs/apk/gitHubProd/debug/*.apk
           if-no-files-found: error
           retention-days: 7
