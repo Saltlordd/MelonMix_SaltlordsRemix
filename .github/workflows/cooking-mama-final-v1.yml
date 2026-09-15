@@ -34,6 +34,8 @@ on:
       - MelonMix-KH-Projection-Bootstrap-Hotfix-v24.patch
       - MelonMix-KH-Launch-Display-Profiles-v25.patch
       - MelonMix-KH-Launch-Profiles-Compiler-Hotfix-v26.patch
+      - MelonMix-KH-Flex-Authoritative-Viewport-v27.patch
+      - MelonMix-KH-ReCoded-White-Screen-and-Portrait-Position-v28.patch
 
 jobs:
   build:
@@ -281,6 +283,12 @@ jobs:
 
       - name: Fix launch-profile warning resource compilation
         run: git apply MelonMix-KH-Launch-Profiles-Compiler-Hotfix-v26.patch
+
+      - name: Make Flex use one authoritative gameplay and video viewport
+        run: git apply MelonMix-KH-Flex-Authoritative-Viewport-v27.patch
+
+      - name: Fix Re:Coded white screen and retain portrait position
+        run: git apply MelonMix-KH-ReCoded-White-Screen-and-Portrait-Position-v28.patch
 
       - name: Target the established adaptive Touch Remix installation
         run: |
