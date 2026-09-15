@@ -1,0 +1,10 @@
+--- a/app/src/main/java/me/magnum/melonds/ui/romdetails/ui/RomConfigUi.kt
++++ b/app/src/main/java/me/magnum/melonds/ui/romdetails/ui/RomConfigUi.kt
+@@ -93,6 +93,7 @@
+                 end = contentPadding.calculateEndPadding(LocalLayoutDirection.current),
+             ),
+     ) {
++        val context = LocalContext.current
+         val launchProfiles = listOf(
+             LaunchDisplayProfile.AUTOMATIC,
+             LaunchDisplayProfile.PORTRAIT_4_3,
