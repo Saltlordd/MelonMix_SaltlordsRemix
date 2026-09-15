@@ -1,0 +1,170 @@
+--- a/app/src/main/res/values/strings.xml
++++ b/app/src/main/res/values/strings.xml
+@@ -1,14 +1,13 @@
+ <resources xmlns:tools="http://schemas.android.com/tools">
+     <string name="app_name">Melon Mix</string>
+-    <string name="kh_remix_subtitle">Saltlord’s Remix v1.0.7</string>
++    <string name="kh_remix_subtitle">Saltlord’s Remix v1.0.8</string>
+     <string name="kh_launch_display_profile">Launch display profile</string>
+-    <string name="kh_launch_display_profile_summary">Automatic follows the current screen and orientation. Locked profiles set orientation and layout before launch, preventing stretching after rotation. Changes apply the next time the game starts. Flex Mode requires the foldable inner display.</string>
++    <string name="kh_launch_display_profile_summary">Automatic adapts the layout and orientation to your device. Tabletop mode is supported on compatible foldables; however, HD cutscenes continue to play fullscreen, and changing posture while playing may stretch 3D graphics until the game is restarted. Select a fixed launch profile to prevent layout and orientation changes. Changes apply the next time the game starts.</string>
+     <string-array name="kh_launch_display_profiles">
+         <item>Automatic</item>
+         <item>Portrait · 4:3</item>
+         <item>Landscape · 4:3</item>
+-        <item>Landscape · Widescreen</item>
+-        <item>Flex Mode</item>
++        <item>Landscape · Fullscreen</item>
+     </string-array>
+     <string name="kh_flex_requires_inner_display">Flex Mode requires the foldable inner display. Open the phone or select another launch profile.</string>
+ 
+--- a/app/src/main/java/me/magnum/melonds/ui/romdetails/ui/RomConfigUi.kt
++++ b/app/src/main/java/me/magnum/melonds/ui/romdetails/ui/RomConfigUi.kt
+@@ -21,7 +21,6 @@
+ import androidx.compose.material.MaterialTheme
+ import androidx.compose.runtime.Composable
+ import androidx.compose.runtime.getValue
+-import androidx.compose.runtime.produceState
+ import androidx.compose.ui.Alignment
+ import androidx.compose.ui.Modifier
+ import androidx.compose.ui.platform.LocalContext
+@@ -35,9 +34,6 @@
+ import me.magnum.melonds.domain.model.rom.Rom
+ import me.magnum.melonds.domain.model.rom.config.RomConfig
+ import me.magnum.melonds.domain.model.rom.config.LaunchDisplayProfile
+-import androidx.activity.ComponentActivity
+-import androidx.window.layout.FoldingFeature
+-import androidx.window.layout.WindowInfoTracker
+ import me.magnum.melonds.ui.common.MelonPreviewSet
+ import me.magnum.melonds.ui.common.component.dialog.TextInputDialog
+ import me.magnum.melonds.ui.common.component.dialog.rememberTextInputDialogState
+@@ -97,23 +93,21 @@
+                 end = contentPadding.calculateEndPadding(LocalLayoutDirection.current),
+             ),
+     ) {
+-        val context = LocalContext.current
+-        val innerFoldableDisplay by produceState(initialValue = false, context) {
+-            val activity = context as? ComponentActivity
+-            if (activity != null) {
+-                WindowInfoTracker.getOrCreate(context).windowLayoutInfo(activity).collect { info ->
+-                    value = info.displayFeatures.any { it is FoldingFeature }
+-                }
+-            }
+-        }
+-        val launchProfiles = LaunchDisplayProfile.entries
++        val launchProfiles = listOf(
++            LaunchDisplayProfile.AUTOMATIC,
++            LaunchDisplayProfile.PORTRAIT_4_3,
++            LaunchDisplayProfile.LANDSCAPE_4_3,
++            LaunchDisplayProfile.LANDSCAPE_WIDESCREEN,
++        )
+         val launchProfileLabels = stringArrayResource(R.array.kh_launch_display_profiles)
++        val selectedLaunchProfile = romConfig.launchDisplayProfile.takeUnless {
++            it == LaunchDisplayProfile.FLEX_MODE
++        } ?: LaunchDisplayProfile.AUTOMATIC
+         SingleChoiceItem(
+             name = stringResource(R.string.kh_launch_display_profile),
+-            value = launchProfileLabels[romConfig.launchDisplayProfile.ordinal],
++            value = launchProfileLabels[launchProfiles.indexOf(selectedLaunchProfile)],
+             items = launchProfileLabels.toList(),
+-            selectedItemIndex = romConfig.launchDisplayProfile.ordinal,
+-            disabledItemIndices = if (innerFoldableDisplay) emptySet() else setOf(LaunchDisplayProfile.FLEX_MODE.ordinal),
++            selectedItemIndex = launchProfiles.indexOf(selectedLaunchProfile),
+             onItemSelected = { onConfigUpdate(RomConfigUpdateEvent.LaunchDisplayProfileUpdate(launchProfiles[it])) },
+         )
+         androidx.compose.material.Text(
+--- a/app/src/main/java/me/magnum/melonds/impl/layout/UILayoutProvider.kt
++++ b/app/src/main/java/me/magnum/melonds/impl/layout/UILayoutProvider.kt
+@@ -86,7 +86,10 @@
+     }
+ 
+     fun setKhLaunchDisplayProfile(profile: LaunchDisplayProfile) {
+-        khLaunchDisplayProfile.value = profile
++        // FLEX_MODE remains in the persisted enum only so old configurations deserialize.
++        // The experimental forced-Flex launch mode is retired and migrates to Automatic.
++        khLaunchDisplayProfile.value = profile.takeUnless { it == LaunchDisplayProfile.FLEX_MODE }
++            ?: LaunchDisplayProfile.AUTOMATIC
+     }
+ 
+     // [KHMM] Replace the screen components of the layout that would otherwise be shown with a
+@@ -144,7 +147,9 @@
+             // by the existing per-game Portrait screen position preference.
+             LaunchDisplayProfile.PORTRAIT_4_3 -> positionedPortrait4By3()
+             LaunchDisplayProfile.LANDSCAPE_4_3 -> aspectFit(safeRect, 4f / 3f)
+-            LaunchDisplayProfile.LANDSCAPE_WIDESCREEN -> aspectFit(safeRect, 16f / 9f)
++            // Fullscreen means the real safe display—not a 16:9 letterbox. The native KH
++            // projection receives this rectangle's aspect ratio from EmulatorActivity.
++            LaunchDisplayProfile.LANDSCAPE_WIDESCREEN -> safeRect
+             LaunchDisplayProfile.FLEX_MODE -> {
+                 if (upperPanelRect == null) {
+                     // Launch unfolded using the full inner display. Once the hinge becomes
+--- a/app/src/main/java/me/magnum/melonds/impl/dtos/rom/RomConfigDto.kt
++++ b/app/src/main/java/me/magnum/melonds/impl/dtos/rom/RomConfigDto.kt
+@@ -42,7 +42,9 @@
+             layoutId?.let { UUID.fromString(it) },
+             gbaSlotConfig.toModel(),
+             customName = customName,
+-            launchDisplayProfile = launchDisplayProfile ?: LaunchDisplayProfile.AUTOMATIC,
++            launchDisplayProfile = launchDisplayProfile
++                ?.takeUnless { it == LaunchDisplayProfile.FLEX_MODE }
++                ?: LaunchDisplayProfile.AUTOMATIC,
+         )
+     }
+ }
+--- a/app/src/main/java/me/magnum/melonds/ui/emulator/EmulatorActivity.kt
++++ b/app/src/main/java/me/magnum/melonds/ui/emulator/EmulatorActivity.kt
+@@ -948,7 +948,7 @@
+                 val aspectRatio = when (khLaunchDisplayProfile) {
+                     LaunchDisplayProfile.PORTRAIT_4_3,
+                     LaunchDisplayProfile.LANDSCAPE_4_3 -> 4f / 3f
+-                    LaunchDisplayProfile.LANDSCAPE_WIDESCREEN -> 16f / 9f
++                    LaunchDisplayProfile.LANDSCAPE_WIDESCREEN -> rect.width.toFloat() / rect.height
+                     LaunchDisplayProfile.FLEX_MODE -> rect.width.toFloat() / rect.height
+                     LaunchDisplayProfile.AUTOMATIC -> rect.width.toFloat() / rect.height
+                 }
+@@ -966,8 +966,9 @@
+     }
+ 
+     private fun applyKhLaunchDisplayProfile(launchArgs: LaunchArgs?) {
+-        khLaunchDisplayProfile = (launchArgs as? LaunchArgs.RomObject)
++        khLaunchDisplayProfile = ((launchArgs as? LaunchArgs.RomObject)
+             ?.rom?.config?.launchDisplayProfile
++            ?: LaunchDisplayProfile.AUTOMATIC).takeUnless { it == LaunchDisplayProfile.FLEX_MODE }
+             ?: LaunchDisplayProfile.AUTOMATIC
+ 
+         requestedOrientation = when (khLaunchDisplayProfile) {
+@@ -981,7 +982,12 @@
+         when (khLaunchDisplayProfile) {
+             LaunchDisplayProfile.PORTRAIT_4_3,
+             LaunchDisplayProfile.LANDSCAPE_4_3 -> MelonEmulator.setDisplayAspectRatio(4f / 3f)
+-            LaunchDisplayProfile.LANDSCAPE_WIDESCREEN -> MelonEmulator.setDisplayAspectRatio(16f / 9f)
++            LaunchDisplayProfile.LANDSCAPE_WIDESCREEN -> {
++                val metrics = resources.displayMetrics
++                if (metrics.widthPixels > 0 && metrics.heightPixels > 0) {
++                    MelonEmulator.setDisplayAspectRatio(metrics.widthPixels.toFloat() / metrics.heightPixels)
++                }
++            }
+             LaunchDisplayProfile.FLEX_MODE -> {
+                 val metrics = resources.displayMetrics
+                 if (metrics.widthPixels > 0 && metrics.heightPixels > 0) {
+--- a/app/src/main/cpp/MelonDS.cpp
++++ b/app/src/main/cpp/MelonDS.cpp
+@@ -144,14 +144,10 @@
+     }
+ 
+     bool isEnhancedGameCode(u32 gameCode) {
+-        // All carts the KH plugins list count as enhanced, EU/JP included. Upstream's
+-        // EU/JP RAM address tables are partly unconfirmed (some marked "TODO: KH Wrong"),
+-        // so those regions run with LIMITED support: a misread can stick the frame veto
+-        // false, which on 1.0.0/1.0.1 white-screened EU ROMs at boot. The veto is now
+-        // bounded in MelonInstance::runFrame (misdetection guard), so a stuck veto
+-        // degrades to desktop-like glitches instead of a white screen. The settings UI
+-        // and GUIDE carry the limited-support disclaimer.
+-        return Plugins::PluginManager::isSupported(gameCode);
++        // The KH plugin's EU/JP RAM tables remain unverified and have previously produced
++        // permanent white screens. Only verified US carts ('E' region byte) enter the
++        // enhancement path; other regions safely run through the ordinary DS renderer.
++        return Plugins::PluginManager::isSupported(gameCode) && ((gameCode >> 24) & 0xFF) == 'E';
+     }
+ 
+     int loadRom(std::string romPath, std::string sramPath, RomGbaSlotConfig* gbaSlotConfig)
