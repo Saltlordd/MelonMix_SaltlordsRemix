@@ -1,0 +1,60 @@
+--- a/app/src/main/java/me/magnum/melonds/impl/layout/UILayoutProvider.kt
++++ b/app/src/main/java/me/magnum/melonds/impl/layout/UILayoutProvider.kt
+@@ -129,8 +129,20 @@
+                 topPanelHeight,
+             )
+         }
++        fun positionedPortrait4By3(): Rect {
++            val boxHeight = (uiWidth * 3f / 4f).toInt()
++            val safeTop = variant.uiInsets.top
++            val safeBottom = variant.uiInsets.bottom
++            val safeHeight = (uiHeight - safeTop - safeBottom).coerceAtLeast(0)
++            val spareHeight = (safeHeight - boxHeight).coerceAtLeast(0)
++            val biasedTop = safeTop + (spareHeight * portraitScreenPosition / 100f).toInt()
++            return Rect(0, biasedTop, uiWidth, boxHeight)
++        }
++
+         val screenRect = when (launchDisplayProfile) {
+-            LaunchDisplayProfile.PORTRAIT_4_3,
++            // This profile locks rotation/aspect only. Its vertical placement remains owned
++            // by the existing per-game Portrait screen position preference.
++            LaunchDisplayProfile.PORTRAIT_4_3 -> positionedPortrait4By3()
+             LaunchDisplayProfile.LANDSCAPE_4_3 -> aspectFit(safeRect, 4f / 3f)
+             LaunchDisplayProfile.LANDSCAPE_WIDESCREEN -> aspectFit(safeRect, 16f / 9f)
+             LaunchDisplayProfile.FLEX_MODE -> {
+@@ -146,15 +158,7 @@
+             LaunchDisplayProfile.AUTOMATIC -> if (flexFold != null) {
+                 upperPanelRect!!
+             } else if (uiHeight > uiWidth) {
+-                // A landscape 4:3 viewport uses substantially more of a tall cover display
+-                // than 16:9 while retaining the DS-like presentation requested by KHDS.
+-                val boxHeight = (uiWidth * 3f / 4f).toInt()
+-                val safeTop = variant.uiInsets.top
+-                val safeBottom = variant.uiInsets.bottom
+-                val safeHeight = (uiHeight - safeTop - safeBottom).coerceAtLeast(0)
+-                val spareHeight = (safeHeight - boxHeight).coerceAtLeast(0)
+-                val biasedTop = safeTop + (spareHeight * portraitScreenPosition / 100f).toInt()
+-                Rect(0, biasedTop, uiWidth, boxHeight)
++                positionedPortrait4By3()
+             } else {
+                 // [KH touch] Keep physical aspect on 4:3-and-wider displays, but fit a
+                 // centred 4:3 viewport on squarer landscape displays.
+--- a/melonDS-android-lib/src/plugins/PluginKingdomHeartsReCoded.cpp
++++ b/melonDS-android-lib/src/plugins/PluginKingdomHeartsReCoded.cpp
+@@ -2783,11 +2783,11 @@
+ 
+ bool PluginKingdomHeartsReCoded::shouldRenderFrame()
+ {
+-    if (!_superShouldRenderFrame())
+-    {
+-        return false;
+-    }
+-
++    // Android always presents Re:Coded frames. The shared replacement-cutscene veto can
++    // remain latched from a false-positive RAM read on this title, leaving the frontend
++    // holding its initial white texture forever. The HD player is a separate Android
++    // overlay, so presenting the emulated frame beneath it is harmless. Days keeps its
++    // veto because that game also uses it to hide alternating halves of double-3D scenes.
+     return true;
+ }
+ 
