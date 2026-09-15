@@ -1,0 +1,917 @@
+diff --git a/app/src/main/java/me/magnum/melonds/di/MelonModule.kt b/app/src/main/java/me/magnum/melonds/di/MelonModule.kt
+index c260f73f..4015b0a3 100644
+--- a/app/src/main/java/me/magnum/melonds/di/MelonModule.kt
++++ b/app/src/main/java/me/magnum/melonds/di/MelonModule.kt
+@@ -181,8 +181,11 @@ object MelonModule {
+     }
+ 
+     @Provides
+-    fun provideUILayoutProvider(defaultLayoutProvider: DefaultLayoutProvider): UILayoutProvider {
+-        return UILayoutProvider(defaultLayoutProvider)
++    fun provideUILayoutProvider(
++        defaultLayoutProvider: DefaultLayoutProvider,
++        @ApplicationContext context: Context,
++    ): UILayoutProvider {
++        return UILayoutProvider(defaultLayoutProvider, context)
+     }
+ 
+     @Provides
+@@ -216,4 +219,4 @@ object MelonModule {
+             settingsRepository = settingsRepository,
+         )
+     }
+-}
+\ No newline at end of file
++}
+diff --git a/app/src/main/java/me/magnum/melonds/domain/model/rom/config/LaunchDisplayProfile.kt b/app/src/main/java/me/magnum/melonds/domain/model/rom/config/LaunchDisplayProfile.kt
+new file mode 100644
+index 00000000..123d2a24
+--- /dev/null
++++ b/app/src/main/java/me/magnum/melonds/domain/model/rom/config/LaunchDisplayProfile.kt
+@@ -0,0 +1,10 @@
++package me.magnum.melonds.domain.model.rom.config
++
++/** A stable, per-ROM presentation chosen before the emulator core starts. */
++enum class LaunchDisplayProfile {
++    AUTOMATIC,
++    PORTRAIT_4_3,
++    LANDSCAPE_4_3,
++    LANDSCAPE_WIDESCREEN,
++    FLEX_MODE,
++}
+diff --git a/app/src/main/java/me/magnum/melonds/domain/model/rom/config/RomConfig.kt b/app/src/main/java/me/magnum/melonds/domain/model/rom/config/RomConfig.kt
+index 4ef9fc56..478ff9e7 100644
+--- a/app/src/main/java/me/magnum/melonds/domain/model/rom/config/RomConfig.kt
++++ b/app/src/main/java/me/magnum/melonds/domain/model/rom/config/RomConfig.kt
+@@ -8,6 +8,7 @@ data class RomConfig(
+     val layoutId: UUID? = null,
+     val gbaSlotConfig: RomGbaSlotConfig = RomGbaSlotConfig.None,
+     val customName: String? = null,
++    val launchDisplayProfile: LaunchDisplayProfile = LaunchDisplayProfile.AUTOMATIC,
+ ) {
+ 
+     companion object {
+@@ -20,6 +21,7 @@ data class RomConfig(
+                 layoutId = null,
+                 gbaSlotConfig = RomGbaSlotConfig.None,
+                 customName = null,
++                launchDisplayProfile = LaunchDisplayProfile.AUTOMATIC,
+             )
+         }
+     }
+diff --git a/app/src/main/java/me/magnum/melonds/impl/dtos/rom/RomConfigDto.kt b/app/src/main/java/me/magnum/melonds/impl/dtos/rom/RomConfigDto.kt
+index ebbeabd4..e39f24e6 100644
+--- a/app/src/main/java/me/magnum/melonds/impl/dtos/rom/RomConfigDto.kt
++++ b/app/src/main/java/me/magnum/melonds/impl/dtos/rom/RomConfigDto.kt
+@@ -2,6 +2,7 @@ package me.magnum.melonds.impl.dtos.rom
+ 
+ import com.google.gson.annotations.SerializedName
+ import me.magnum.melonds.domain.model.rom.config.RomConfig
++import me.magnum.melonds.domain.model.rom.config.LaunchDisplayProfile
+ import me.magnum.melonds.domain.model.rom.config.RuntimeConsoleType
+ import me.magnum.melonds.domain.model.rom.config.RuntimeMicSource
+ import java.util.UUID
+@@ -17,6 +18,8 @@ data class RomConfigDto(
+     val gbaSlotConfig: RomGbaSlotConfigDto,
+     @SerializedName("customName")
+     val customName: String? = null,
++    @SerializedName("launchDisplayProfile")
++    val launchDisplayProfile: LaunchDisplayProfile? = null,
+ ) {
+ 
+     companion object {
+@@ -27,6 +30,7 @@ data class RomConfigDto(
+                 romConfig.layoutId?.toString(),
+                 RomGbaSlotConfigDto.fromModel(romConfig.gbaSlotConfig),
+                 romConfig.customName,
++                romConfig.launchDisplayProfile,
+             )
+         }
+     }
+@@ -38,6 +42,7 @@ data class RomConfigDto(
+             layoutId?.let { UUID.fromString(it) },
+             gbaSlotConfig.toModel(),
+             customName = customName,
++            launchDisplayProfile = launchDisplayProfile ?: LaunchDisplayProfile.AUTOMATIC,
+         )
+     }
+-}
+\ No newline at end of file
++}
+diff --git a/app/src/main/java/me/magnum/melonds/impl/layout/UILayoutProvider.kt b/app/src/main/java/me/magnum/melonds/impl/layout/UILayoutProvider.kt
+index 23a47d8a..3cb9e1c8 100644
+--- a/app/src/main/java/me/magnum/melonds/impl/layout/UILayoutProvider.kt
++++ b/app/src/main/java/me/magnum/melonds/impl/layout/UILayoutProvider.kt
+@@ -1,5 +1,6 @@
+ package me.magnum.melonds.impl.layout
+ 
++import android.content.Context
+ import kotlinx.coroutines.FlowPreview
+ import kotlinx.coroutines.flow.MutableStateFlow
+ import kotlinx.coroutines.flow.combine
+@@ -16,11 +17,15 @@ import me.magnum.melonds.domain.model.layout.ScreenFold
+ import me.magnum.melonds.domain.model.layout.ScreenLayout
+ import me.magnum.melonds.domain.model.layout.UILayout
+ import me.magnum.melonds.domain.model.layout.UILayoutVariant
++import me.magnum.melonds.domain.model.rom.config.LaunchDisplayProfile
+ import me.magnum.melonds.domain.model.ui.Orientation
+ import kotlin.time.Duration.Companion.milliseconds
+ 
+ @OptIn(FlowPreview::class)
+-class UILayoutProvider(private val defaultLayoutProvider: DefaultLayoutProvider) {
++class UILayoutProvider(
++    private val defaultLayoutProvider: DefaultLayoutProvider,
++    private val context: Context,
++) {
+ 
+     private val currentUiSize = MutableStateFlow<Point?>(null)
+     private val currentUiInsets = MutableStateFlow<Insets?>(null)
+@@ -44,13 +49,15 @@ class UILayoutProvider(private val defaultLayoutProvider: DefaultLayoutProvider)
+     // touching the user's saved layouts.
+     private val khTopScreenOnly = MutableStateFlow(false)
+     private val khPortraitScreenPosition = MutableStateFlow(20)
++    private val khLaunchDisplayProfile = MutableStateFlow(LaunchDisplayProfile.AUTOMATIC)
+ 
+     val currentLayout = combine(
+         _currentLayoutConfiguration,
+         currentLayoutVariant,
+         khTopScreenOnly,
+         khPortraitScreenPosition,
+-    ) { layoutConfiguration, variant, topScreenOnly, portraitScreenPosition ->
++        khLaunchDisplayProfile,
++    ) { layoutConfiguration, variant, topScreenOnly, portraitScreenPosition, launchDisplayProfile ->
+         if (layoutConfiguration == null || variant == null) {
+             null
+         } else {
+@@ -63,7 +70,7 @@ class UILayoutProvider(private val defaultLayoutProvider: DefaultLayoutProvider)
+                 getOptimalLayoutForVariant(layoutConfiguration, variant)
+             }
+             variant to if (topScreenOnly) {
+-                buildKhTopScreenOnlyLayout(layout, variant, portraitScreenPosition)
++                buildKhTopScreenOnlyLayout(layout, variant, portraitScreenPosition, launchDisplayProfile)
+             } else {
+                 layout
+             }
+@@ -78,6 +85,10 @@ class UILayoutProvider(private val defaultLayoutProvider: DefaultLayoutProvider)
+         khPortraitScreenPosition.value = position.coerceIn(0, 50)
+     }
+ 
++    fun setKhLaunchDisplayProfile(profile: LaunchDisplayProfile) {
++        khLaunchDisplayProfile.value = profile
++    }
++
+     // [KHMM] Replace the screen components of the layout that would otherwise be shown with a
+     // single TOP_SCREEN covering the whole UI (landscape: stretched full-screen; portrait: a
+     // full-width 4:3 box positioned within the safe vertical gap). Buttons and other components
+@@ -87,6 +98,7 @@ class UILayoutProvider(private val defaultLayoutProvider: DefaultLayoutProvider)
+         baseLayout: UILayout,
+         variant: UILayoutVariant,
+         portraitScreenPosition: Int,
++        launchDisplayProfile: LaunchDisplayProfile,
+     ): UILayout {
+         val uiWidth = variant.uiSize.x
+         val uiHeight = variant.uiSize.y
+@@ -99,47 +111,60 @@ class UILayoutProvider(private val defaultLayoutProvider: DefaultLayoutProvider)
+                 it.foldBounds.y > variant.uiInsets.top &&
+                 it.foldBounds.y < uiHeight - variant.uiInsets.bottom
+         }
+-        val screenRect = if (flexFold != null) {
++        val safeRect = Rect(
++            variant.uiInsets.left,
++            variant.uiInsets.top,
++            (uiWidth - variant.uiInsets.left - variant.uiInsets.right).coerceAtLeast(0),
++            (uiHeight - variant.uiInsets.top - variant.uiInsets.bottom).coerceAtLeast(0),
++        )
++        val upperPanelRect = flexFold?.let {
+             val safeLeft = variant.uiInsets.left
+             val safeTop = variant.uiInsets.top
+             val safeWidth = (uiWidth - safeLeft - variant.uiInsets.right).coerceAtLeast(0)
+             val topPanelHeight = (flexFold.foldBounds.y - safeTop).coerceAtLeast(0)
+-            // Flex mode is its own DS-like presentation: give the KH compositor the whole
+-            // physical upper panel rather than fitting a conventional 16:9 box inside it.
+-            // The compositor receives this real aspect ratio, so gameplay expands ultrawide
+-            // without stretching. Fixed-aspect HD videos letterbox within the same rectangle.
+             Rect(
+                 safeLeft,
+                 safeTop,
+                 safeWidth,
+                 topPanelHeight,
+             )
+-        } else if (uiHeight > uiWidth) {
+-            // A landscape 4:3 viewport uses substantially more of a tall cover display
+-            // than 16:9 while retaining the DS-like presentation requested by KHDS. Place
+-            // it 20% of the way through the safe vertical gap instead of dead-centre: this
+-            // creates a handheld-like upper-screen composition and leaves more clear control
+-            // space below on both cover and unfolded portrait displays, without ever crossing
+-            // a cutout/system-bar safe inset.
+-            val boxHeight = (uiWidth * 3f / 4f).toInt()
+-            val safeTop = variant.uiInsets.top
+-            val safeBottom = variant.uiInsets.bottom
+-            val safeHeight = (uiHeight - safeTop - safeBottom).coerceAtLeast(0)
+-            val spareHeight = (safeHeight - boxHeight).coerceAtLeast(0)
+-            val biasedTop = safeTop + (spareHeight * portraitScreenPosition / 100f).toInt()
+-            Rect(0, biasedTop, uiWidth, boxHeight)
+-        } else {
+-            // [KH touch] The unfolded Fold display is squarer than the DS UI's 4:3
+-            // canvas. Asking the KH compositor for that near-square ratio crops the
+-            // authored left/right edges of dialogue, save and config screens. Keep the
+-            // physical aspect on 4:3-and-wider displays, but fit a centred 4:3 viewport
+-            // on squarer landscape displays. Controls still use the full window.
+-            val minimumAspect = 4f / 3f
+-            if (uiWidth.toFloat() / uiHeight >= minimumAspect) {
+-                Rect(0, 0, uiWidth, uiHeight)
++        }
++        val screenRect = when (launchDisplayProfile) {
++            LaunchDisplayProfile.PORTRAIT_4_3,
++            LaunchDisplayProfile.LANDSCAPE_4_3 -> aspectFit(safeRect, 4f / 3f)
++            LaunchDisplayProfile.LANDSCAPE_WIDESCREEN -> aspectFit(safeRect, 16f / 9f)
++            LaunchDisplayProfile.FLEX_MODE -> {
++                if (upperPanelRect == null) {
++                    // The game is launched unfolded in landscape, then moves into the upper
++                    // panel when the hinge becomes separating.
++                    aspectFit(safeRect, 16f / 9f)
++                } else {
++                    val upperPanelWidthDp = upperPanelRect.width / context.resources.displayMetrics.density
++                    if (upperPanelWidthDp < 600f) aspectFit(upperPanelRect, 4f / 3f) else upperPanelRect
++                }
++            }
++            LaunchDisplayProfile.AUTOMATIC -> if (flexFold != null) {
++                upperPanelRect!!
++            } else if (uiHeight > uiWidth) {
++                // A landscape 4:3 viewport uses substantially more of a tall cover display
++                // than 16:9 while retaining the DS-like presentation requested by KHDS.
++                val boxHeight = (uiWidth * 3f / 4f).toInt()
++                val safeTop = variant.uiInsets.top
++                val safeBottom = variant.uiInsets.bottom
++                val safeHeight = (uiHeight - safeTop - safeBottom).coerceAtLeast(0)
++                val spareHeight = (safeHeight - boxHeight).coerceAtLeast(0)
++                val biasedTop = safeTop + (spareHeight * portraitScreenPosition / 100f).toInt()
++                Rect(0, biasedTop, uiWidth, boxHeight)
+             } else {
+-                val boxHeight = (uiWidth / minimumAspect).toInt()
+-                Rect(0, (uiHeight - boxHeight) / 2, uiWidth, boxHeight)
++                // [KH touch] Keep physical aspect on 4:3-and-wider displays, but fit a
++                // centred 4:3 viewport on squarer landscape displays.
++                val minimumAspect = 4f / 3f
++                if (uiWidth.toFloat() / uiHeight >= minimumAspect) {
++                    Rect(0, 0, uiWidth, uiHeight)
++                } else {
++                    val boxHeight = (uiWidth / minimumAspect).toInt()
++                    Rect(0, (uiHeight - boxHeight) / 2, uiWidth, boxHeight)
++                }
+             }
+         }
+ 
+@@ -151,6 +176,18 @@ class UILayoutProvider(private val defaultLayoutProvider: DefaultLayoutProvider)
+         return baseLayout.copy(mainScreenLayout = baseLayout.mainScreenLayout.copy(components = components))
+     }
+ 
++    private fun aspectFit(bounds: Rect, aspectRatio: Float): Rect {
++        if (bounds.width <= 0 || bounds.height <= 0) return bounds
++        val boundsAspect = bounds.width.toFloat() / bounds.height
++        return if (boundsAspect > aspectRatio) {
++            val width = (bounds.height * aspectRatio).toInt()
++            Rect(bounds.x + (bounds.width - width) / 2, bounds.y, width, bounds.height)
++        } else {
++            val height = (bounds.width / aspectRatio).toInt()
++            Rect(bounds.x, bounds.y + (bounds.height - height) / 2, bounds.width, height)
++        }
++    }
++
+     fun updateCurrentOrientation(orientation: Orientation) {
+         currentOrientation.value = orientation
+     }
+diff --git a/app/src/main/java/me/magnum/melonds/parcelables/RomConfigParcelable.kt b/app/src/main/java/me/magnum/melonds/parcelables/RomConfigParcelable.kt
+index 790b8ec6..790afebf 100644
+--- a/app/src/main/java/me/magnum/melonds/parcelables/RomConfigParcelable.kt
++++ b/app/src/main/java/me/magnum/melonds/parcelables/RomConfigParcelable.kt
+@@ -3,6 +3,7 @@ package me.magnum.melonds.parcelables
+ import android.os.Parcel
+ import android.os.Parcelable
+ import me.magnum.melonds.domain.model.rom.config.RomConfig
++import me.magnum.melonds.domain.model.rom.config.LaunchDisplayProfile
+ import me.magnum.melonds.domain.model.rom.config.RuntimeConsoleType
+ import me.magnum.melonds.domain.model.rom.config.RuntimeMicSource
+ import me.magnum.melonds.extensions.parcelable
+@@ -22,6 +23,7 @@ class RomConfigParcelable : Parcelable {
+             layoutId = parcel.readString()?.let { UUID.fromString(it) },
+             gbaSlotConfig = parcel.parcelable<RomGbaSlotConfigParcelable>()!!.gbaSlotConfig,
+             customName = parcel.readString(),
++            launchDisplayProfile = LaunchDisplayProfile.entries.getOrElse(parcel.readInt()) { LaunchDisplayProfile.AUTOMATIC },
+         )
+     }
+ 
+@@ -31,6 +33,7 @@ class RomConfigParcelable : Parcelable {
+         dest.writeString(romConfig.layoutId?.toString())
+         dest.writeParcelable(RomGbaSlotConfigParcelable(romConfig.gbaSlotConfig), 0)
+         dest.writeString(romConfig.customName)
++        dest.writeInt(romConfig.launchDisplayProfile.ordinal)
+     }
+ 
+     override fun describeContents(): Int {
+@@ -46,4 +49,4 @@ class RomConfigParcelable : Parcelable {
+             return arrayOfNulls(size)
+         }
+     }
+-}
+\ No newline at end of file
++}
+diff --git a/app/src/main/java/me/magnum/melonds/ui/common/preference/SingleChoicePreference.kt b/app/src/main/java/me/magnum/melonds/ui/common/preference/SingleChoicePreference.kt
+index 949ec4e6..eca2b2dd 100644
+--- a/app/src/main/java/me/magnum/melonds/ui/common/preference/SingleChoicePreference.kt
++++ b/app/src/main/java/me/magnum/melonds/ui/common/preference/SingleChoicePreference.kt
+@@ -27,6 +27,7 @@ fun SingleChoiceItem(
+     selectedItemIndex: Int,
+     onItemSelected: (Int) -> Unit,
+     enabled: Boolean = true,
++    disabledItemIndices: Set<Int> = emptySet(),
+     horizontalPadding: Dp = 16.dp,
+ ) {
+     var isDialogShown by remember {
+@@ -63,6 +64,7 @@ fun SingleChoiceItem(
+             items = items,
+             selectedItemIndex = selectedItemIndex,
+             onOptionSelected = onItemSelected,
++            disabledItemIndices = disabledItemIndices,
+             onDismissRequest = { isDialogShown = false },
+         )
+     }
+@@ -74,6 +76,7 @@ private fun SingleChoiceDialog(
+     items: List<String>,
+     selectedItemIndex: Int,
+     onOptionSelected: (index: Int) -> Unit,
++    disabledItemIndices: Set<Int>,
+     onDismissRequest: () -> Unit,
+ ) {
+     DetachedDialog(
+@@ -101,23 +104,27 @@ private fun SingleChoiceDialog(
+ 
+                 LazyColumn {
+                     itemsIndexed(items) { index, item ->
+-                        Row(
+-                            modifier = Modifier
+-                                .fillMaxWidth()
+-                                .clickable {
+-                                    onOptionSelected(index)
+-                                    onDismissRequest()
+-                                }
+-                                .heightIn(min = 48.dp)
+-                                .padding(start = 24.dp),
+-                            verticalAlignment = Alignment.CenterVertically,
+-                        ) {
+-                            RadioButton(
+-                                selected = index == selectedItemIndex,
+-                                onClick = null,
+-                            )
+-                            Spacer(Modifier.width(32.dp))
+-                            Text(text = item)
++                        val optionEnabled = index !in disabledItemIndices
++                        CompositionLocalProvider(LocalContentAlpha provides if (optionEnabled) ContentAlpha.high else ContentAlpha.disabled) {
++                            Row(
++                                modifier = Modifier
++                                    .fillMaxWidth()
++                                    .clickable(enabled = optionEnabled) {
++                                        onOptionSelected(index)
++                                        onDismissRequest()
++                                    }
++                                    .heightIn(min = 48.dp)
++                                    .padding(start = 24.dp),
++                                verticalAlignment = Alignment.CenterVertically,
++                            ) {
++                                RadioButton(
++                                    selected = index == selectedItemIndex,
++                                    enabled = optionEnabled,
++                                    onClick = null,
++                                )
++                                Spacer(Modifier.width(32.dp))
++                                Text(text = item)
++                            }
+                         }
+                     }
+                 }
+@@ -144,4 +151,4 @@ private fun SingleChoiceDialog(
+             }
+         }
+     }
+-}
+\ No newline at end of file
++}
+diff --git a/app/src/main/java/me/magnum/melonds/ui/emulator/EmulatorActivity.kt b/app/src/main/java/me/magnum/melonds/ui/emulator/EmulatorActivity.kt
+index f456093d..c24e8053 100644
+--- a/app/src/main/java/me/magnum/melonds/ui/emulator/EmulatorActivity.kt
++++ b/app/src/main/java/me/magnum/melonds/ui/emulator/EmulatorActivity.kt
+@@ -2,6 +2,7 @@ package me.magnum.melonds.ui.emulator
+ 
+ import android.content.Context
+ import android.content.Intent
++import android.content.pm.ActivityInfo
+ import android.content.res.Configuration
+ import android.hardware.display.DisplayManager
+ import android.hardware.input.InputManager
+@@ -64,6 +65,7 @@ import me.magnum.melonds.domain.model.layout.LayoutComponent
+ import me.magnum.melonds.domain.model.layout.ScreenFold
+ import me.magnum.melonds.domain.model.rewind.RewindWindowPosition
+ import me.magnum.melonds.domain.model.rom.Rom
++import me.magnum.melonds.domain.model.rom.config.LaunchDisplayProfile
+ import me.magnum.melonds.domain.model.rom.config.RomGbaSlotConfig
+ import me.magnum.melonds.domain.model.ui.Orientation
+ import me.magnum.melonds.extensions.insetsControllerCompat
+@@ -136,6 +138,7 @@ class EmulatorActivity : AppCompatActivity() {
+     }
+ 
+     private lateinit var binding: ActivityEmulatorBinding
++    private var khLaunchDisplayProfile = LaunchDisplayProfile.AUTOMATIC
+     private val viewModel: EmulatorViewModel by viewModels(
+         extrasProducer = {
+             val extras = MutableCreationExtras(defaultViewModelCreationExtras)
+@@ -178,10 +181,6 @@ class EmulatorActivity : AppCompatActivity() {
+     // The editable screen view is layout-relative and can lag a posture transaction, so it is
+     // not a reliable clipping rectangle for the Compose video overlay.
+     private val khFlexUpperPanelRect = androidx.compose.runtime.mutableStateOf<me.magnum.melonds.domain.model.Rect?>(null)
+-    // [KHMM v23] The finished layout is the authoritative Flex signal for video. Vendor fold
+-    // posture can arrive before or after the layout transaction and was inverted on some devices.
+-    private val khCinematicViewportRect =
+-        androidx.compose.runtime.mutableStateOf<me.magnum.melonds.domain.model.Rect?>(null)
+     private var khFoldGeometrySignature: String? = null
+     private var khObservedTopScreenView: View? = null
+     private val khTopScreenGeometryListener = View.OnLayoutChangeListener { _, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom ->
+@@ -312,6 +311,7 @@ class EmulatorActivity : AppCompatActivity() {
+ 
+     override fun onCreate(savedInstanceState: Bundle?) {
+         super.onCreate(savedInstanceState)
++        applyKhLaunchDisplayProfile(LaunchArgs.fromIntent(intent))
+         handler = Handler(mainLooper)
+         lifecycleOwnerProvider.setCurrentLifecycleOwner(this)
+         binding = ActivityEmulatorBinding.inflate(layoutInflater)
+@@ -408,13 +408,11 @@ class EmulatorActivity : AppCompatActivity() {
+                 KhCutscenePlayerUi(
+                     state = khCutsceneState.value,
+                     paused = khPauseMenuState.value != null || khEmulatorPaused.value,
+-                    // A separating horizontal hinge is the authoritative Flex signal. Some
+-                    // devices report FLAT while still separating, so gating this on HALF_OPENED
+-                    // allowed HD video to escape back to the full window.
+-                    // [KHMM v22] Always bind cinematics to the actual enhanced-game viewport.
+-                    // This is already the authoritative result of the fold/layout pipeline and
+-                    // avoids a second posture detector disagreeing with Samsung Flex Mode.
+-                    viewportBounds = khCinematicViewportRect.value,
++                    // Explicit Flex video shares the committed gameplay viewport. Other launch
++                    // profiles retain the established fullscreen cinematic presentation.
++                    viewportBounds = khTopScreenRect.value.takeIf {
++                        khLaunchDisplayProfile == LaunchDisplayProfile.FLEX_MODE && khFlexMode.value
++                    },
+                     onEnded = { MelonEmulator.onKhCutsceneEnded() },
+                     onFailed = { MelonEmulator.onKhCutsceneFailed(it) },
+                 )
+@@ -795,6 +793,7 @@ class EmulatorActivity : AppCompatActivity() {
+                     .setMessage(getString(R.string.message_stop_emulation))
+                     .setPositiveButton(R.string.ok) { _, _ ->
+                         setIntent(intent)
++                        applyKhLaunchDisplayProfile(launchArgs)
+                         viewModel.relaunchWithNewArgs(launchArgs)
+                     }
+                     .setNegativeButton(R.string.no) { dialog, _ ->
+@@ -886,7 +885,9 @@ class EmulatorActivity : AppCompatActivity() {
+ 
+     private fun setupSoftInput(layoutConfiguration: RuntimeInputLayoutConfiguration?) {
+         if (layoutConfiguration != null) {
+-            setLayoutOrientation(layoutConfiguration.layoutOrientation)
++            if (khLaunchDisplayProfile == LaunchDisplayProfile.AUTOMATIC) {
++                setLayoutOrientation(layoutConfiguration.layoutOrientation)
++            }
+             with(binding.viewLayoutControls) {
+                 instantiateLayout(layoutConfiguration, LayoutTarget.MAIN_SCREEN)
+                 setLayoutComponentToggleState(LayoutComponent.BUTTON_FAST_FORWARD_TOGGLE, frontendInputHandler.fastForwardEnabled)
+@@ -935,18 +936,6 @@ class EmulatorActivity : AppCompatActivity() {
+         // [KHMM] the pause-menu overlay anchors to the top-screen viewport
+         khTopScreenRect.value = topView?.getRect()
+ 
+-        // A tabletop layout occupies essentially the full width but only the upper half of a
+-        // landscape window. Use that committed rectangle for video; null preserves the original
+-        // centered full-window cinematic behavior in ordinary landscape and portrait layouts.
+-        khCinematicViewportRect.value = topView?.getRect()?.takeIf { rect ->
+-            val rootWidth = binding.layoutRoot.width
+-            val rootHeight = binding.layoutRoot.height
+-            rootWidth > 0 && rootHeight > 0 && rootWidth >= rootHeight &&
+-                rect.width >= (rootWidth * 0.90f).toInt() &&
+-                rect.height <= (rootHeight * 0.65f).toInt() &&
+-                rect.y <= (rootHeight * 0.15f).toInt()
+-        }
+-
+         if (topView?.view !== khObservedTopScreenView) {
+             observeKhTopScreenGeometry()
+         }
+@@ -954,9 +943,20 @@ class EmulatorActivity : AppCompatActivity() {
+         // [KHMM] tell the enhanced-graphics plugin the real aspect ratio of the on-screen
+         // top-screen viewport (its composite is built for exactly this aspect). Pushed on
+         // every layout change; the native side ignores it when the plugin is inactive.
+-        topView?.getRect()?.let {
+-            if (it.width > 0 && it.height > 0) {
+-                MelonEmulator.setDisplayAspectRatio(it.width.toFloat() / it.height)
++        topView?.getRect()?.let { rect ->
++            if (rect.width > 0 && rect.height > 0) {
++                val aspectRatio = when (khLaunchDisplayProfile) {
++                    LaunchDisplayProfile.PORTRAIT_4_3,
++                    LaunchDisplayProfile.LANDSCAPE_4_3 -> 4f / 3f
++                    LaunchDisplayProfile.LANDSCAPE_WIDESCREEN -> 16f / 9f
++                    LaunchDisplayProfile.FLEX_MODE -> if (khFlexMode.value) {
++                        rect.width.toFloat() / rect.height
++                    } else {
++                        16f / 9f
++                    }
++                    LaunchDisplayProfile.AUTOMATIC -> rect.width.toFloat() / rect.height
++                }
++                MelonEmulator.setDisplayAspectRatio(aspectRatio)
+             }
+         }
+ 
+@@ -969,6 +969,28 @@ class EmulatorActivity : AppCompatActivity() {
+         }
+     }
+ 
++    private fun applyKhLaunchDisplayProfile(launchArgs: LaunchArgs?) {
++        khLaunchDisplayProfile = (launchArgs as? LaunchArgs.RomObject)
++            ?.rom?.config?.launchDisplayProfile
++            ?: LaunchDisplayProfile.AUTOMATIC
++
++        requestedOrientation = when (khLaunchDisplayProfile) {
++            LaunchDisplayProfile.PORTRAIT_4_3 -> ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT
++            LaunchDisplayProfile.LANDSCAPE_4_3,
++            LaunchDisplayProfile.LANDSCAPE_WIDESCREEN,
++            LaunchDisplayProfile.FLEX_MODE -> ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
++            LaunchDisplayProfile.AUTOMATIC -> ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
++        }
++
++        when (khLaunchDisplayProfile) {
++            LaunchDisplayProfile.PORTRAIT_4_3,
++            LaunchDisplayProfile.LANDSCAPE_4_3 -> MelonEmulator.setDisplayAspectRatio(4f / 3f)
++            LaunchDisplayProfile.LANDSCAPE_WIDESCREEN,
++            LaunchDisplayProfile.FLEX_MODE -> MelonEmulator.setDisplayAspectRatio(16f / 9f)
++            LaunchDisplayProfile.AUTOMATIC -> Unit
++        }
++    }
++
+     /**
+      * [KHMM v21] Observe the actual enhanced-screen child. Fold posture and rotation can change
+      * its rectangle after the full-window RuntimeLayoutView has already finished laying out;
+diff --git a/app/src/main/java/me/magnum/melonds/ui/emulator/EmulatorViewModel.kt b/app/src/main/java/me/magnum/melonds/ui/emulator/EmulatorViewModel.kt
+index 2e98b7b1..05392f69 100644
+--- a/app/src/main/java/me/magnum/melonds/ui/emulator/EmulatorViewModel.kt
++++ b/app/src/main/java/me/magnum/melonds/ui/emulator/EmulatorViewModel.kt
+@@ -708,6 +708,7 @@ class EmulatorViewModel @Inject constructor(
+         _secondaryScreenBackground.value = RuntimeBackground.None
+         _layout.value = null
+         uiLayoutProvider.setKhTopScreenOnly(false) // [KHMM]
++        uiLayoutProvider.setKhLaunchDisplayProfile(me.magnum.melonds.domain.model.rom.config.LaunchDisplayProfile.AUTOMATIC)
+     }
+ 
+     // [KHMM] Drive the automatic single-screen (top-screen-only) layout: active only while the
+@@ -874,6 +875,7 @@ class EmulatorViewModel @Inject constructor(
+     }
+ 
+     private fun startObservingLayoutForRom(rom: Rom) {
++        uiLayoutProvider.setKhLaunchDisplayProfile(rom.config.launchDisplayProfile)
+         val romLayoutId = rom.config.layoutId
+         val layoutFlow = if (romLayoutId == null) {
+             getGlobalLayoutFlow()
+diff --git a/app/src/main/java/me/magnum/melonds/ui/romdetails/RomDetailsActivity.kt b/app/src/main/java/me/magnum/melonds/ui/romdetails/RomDetailsActivity.kt
+index a56adcaf..fcc76200 100644
+--- a/app/src/main/java/me/magnum/melonds/ui/romdetails/RomDetailsActivity.kt
++++ b/app/src/main/java/me/magnum/melonds/ui/romdetails/RomDetailsActivity.kt
+@@ -9,10 +9,18 @@ import androidx.appcompat.app.AppCompatActivity
+ import androidx.compose.runtime.LaunchedEffect
+ import androidx.compose.runtime.collectAsState
+ import androidx.compose.runtime.getValue
++import androidx.lifecycle.Lifecycle
++import androidx.lifecycle.lifecycleScope
++import androidx.lifecycle.repeatOnLifecycle
++import androidx.window.layout.FoldingFeature
++import androidx.window.layout.WindowInfoTracker
++import android.widget.Toast
++import kotlinx.coroutines.launch
+ import androidx.core.net.toUri
+ import dagger.hilt.android.AndroidEntryPoint
+ import me.magnum.melonds.domain.model.ConsoleType
+ import me.magnum.melonds.domain.model.rom.Rom
++import me.magnum.melonds.domain.model.rom.config.LaunchDisplayProfile
+ import me.magnum.melonds.ui.common.rom.EmulatorLaunchValidatorDelegate
+ import me.magnum.melonds.ui.emulator.EmulatorActivity
+ import me.magnum.melonds.ui.romdetails.ui.RomDetailsScreen
+@@ -21,6 +29,8 @@ import me.magnum.melonds.ui.theme.MelonTheme
+ @AndroidEntryPoint
+ class RomDetailsActivity : AppCompatActivity() {
+ 
++    private var isFoldableInnerDisplay = false
++
+     companion object {
+         const val KEY_ROM = "rom"
+     }
+@@ -31,6 +41,13 @@ class RomDetailsActivity : AppCompatActivity() {
+     override fun onCreate(savedInstanceState: Bundle?) {
+         enableEdgeToEdge()
+         super.onCreate(savedInstanceState)
++        lifecycleScope.launch {
++            lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
++                WindowInfoTracker.getOrCreate(this@RomDetailsActivity).windowLayoutInfo(this@RomDetailsActivity).collect { info ->
++                    isFoldableInnerDisplay = info.displayFeatures.any { it is FoldingFeature }
++                }
++            }
++        }
+         val emulatorLauncherValidatorDelegate = EmulatorLaunchValidatorDelegate(this, object : EmulatorLaunchValidatorDelegate.Callback {
+             override fun onRomValidated(rom: Rom) {
+                 val intent = EmulatorActivity.getRomEmulatorActivityIntent(this@RomDetailsActivity, rom)
+@@ -65,7 +82,11 @@ class RomDetailsActivity : AppCompatActivity() {
+                     retroAchievementsUiState = retroAchievementsUiState,
+                     onNavigateBack = { onNavigateUp() },
+                     onLaunchRom = {
+-                        emulatorLauncherValidatorDelegate.validateRom(it)
++                        if (it.config.launchDisplayProfile == LaunchDisplayProfile.FLEX_MODE && !isFoldableInnerDisplay) {
++                            Toast.makeText(this@RomDetailsActivity, R.string.kh_flex_requires_inner_display, Toast.LENGTH_LONG).show()
++                        } else {
++                            emulatorLauncherValidatorDelegate.validateRom(it)
++                        }
+                     },
+                     onRomConfigUpdate = {
+                         romDetailsViewModel.onRomConfigUpdateEvent(it)
+@@ -90,4 +111,4 @@ class RomDetailsActivity : AppCompatActivity() {
+         }
+         startActivity(intent)
+     }
+-}
+\ No newline at end of file
++}
+diff --git a/app/src/main/java/me/magnum/melonds/ui/romdetails/RomDetailsUiMapper.kt b/app/src/main/java/me/magnum/melonds/ui/romdetails/RomDetailsUiMapper.kt
+index baf80ef5..23e46efb 100644
+--- a/app/src/main/java/me/magnum/melonds/ui/romdetails/RomDetailsUiMapper.kt
++++ b/app/src/main/java/me/magnum/melonds/ui/romdetails/RomDetailsUiMapper.kt
+@@ -21,6 +21,7 @@ class RomDetailsUiMapper(
+             layoutName = romConfig.layoutId?.let { layoutsRepository.getLayout(it)?.name } ?: layoutsRepository.getGlobalLayoutPlaceholder().name,
+             gbaSlotConfig = mapGbaSlotConfigToUi(romConfig.gbaSlotConfig),
+             customName = romConfig.customName,
++            launchDisplayProfile = romConfig.launchDisplayProfile,
+         )
+     }
+ 
+diff --git a/app/src/main/java/me/magnum/melonds/ui/romdetails/RomDetailsViewModel.kt b/app/src/main/java/me/magnum/melonds/ui/romdetails/RomDetailsViewModel.kt
+index 4e6038c3..25fc9868 100644
+--- a/app/src/main/java/me/magnum/melonds/ui/romdetails/RomDetailsViewModel.kt
++++ b/app/src/main/java/me/magnum/melonds/ui/romdetails/RomDetailsViewModel.kt
+@@ -80,6 +80,7 @@ class RomDetailsViewModel @Inject constructor(
+                 }
+             }
+             is RomConfigUpdateEvent.CustomNameUpdate -> currentRomConfig.copy(customName = event.customName)
++            is RomConfigUpdateEvent.LaunchDisplayProfileUpdate -> currentRomConfig.copy(launchDisplayProfile = event.profile)
+         }
+ 
+         newRomConfig?.let { newConfig ->
+@@ -102,4 +103,4 @@ class RomDetailsViewModel @Inject constructor(
+         }
+         romsRepository.updateRomConfig(_rom.value, newConfig)
+     }
+-}
+\ No newline at end of file
++}
+diff --git a/app/src/main/java/me/magnum/melonds/ui/romdetails/model/RomConfigUiModel.kt b/app/src/main/java/me/magnum/melonds/ui/romdetails/model/RomConfigUiModel.kt
+index adf7412f..8199a0e2 100644
+--- a/app/src/main/java/me/magnum/melonds/ui/romdetails/model/RomConfigUiModel.kt
++++ b/app/src/main/java/me/magnum/melonds/ui/romdetails/model/RomConfigUiModel.kt
+@@ -1,6 +1,7 @@
+ package me.magnum.melonds.ui.romdetails.model
+ 
+ import me.magnum.melonds.domain.model.rom.config.RuntimeConsoleType
++import me.magnum.melonds.domain.model.rom.config.LaunchDisplayProfile
+ import me.magnum.melonds.domain.model.rom.config.RuntimeMicSource
+ import java.util.UUID
+ 
+@@ -11,4 +12,5 @@ data class RomConfigUiModel(
+     val layoutName: String? = null,
+     val gbaSlotConfig: RomGbaSlotConfigUiModel = RomGbaSlotConfigUiModel(),
+     val customName: String? = null,
++    val launchDisplayProfile: LaunchDisplayProfile = LaunchDisplayProfile.AUTOMATIC,
+ )
+diff --git a/app/src/main/java/me/magnum/melonds/ui/romdetails/model/RomConfigUpdateEvent.kt b/app/src/main/java/me/magnum/melonds/ui/romdetails/model/RomConfigUpdateEvent.kt
+index acbf953d..ea66ace7 100644
+--- a/app/src/main/java/me/magnum/melonds/ui/romdetails/model/RomConfigUpdateEvent.kt
++++ b/app/src/main/java/me/magnum/melonds/ui/romdetails/model/RomConfigUpdateEvent.kt
+@@ -2,6 +2,7 @@ package me.magnum.melonds.ui.romdetails.model
+ 
+ import android.net.Uri
+ import me.magnum.melonds.domain.model.rom.config.RuntimeConsoleType
++import me.magnum.melonds.domain.model.rom.config.LaunchDisplayProfile
+ import me.magnum.melonds.domain.model.rom.config.RuntimeMicSource
+ import java.util.UUID
+ 
+@@ -13,4 +14,5 @@ sealed class RomConfigUpdateEvent {
+     data class GbaRomPathUpdate(val gbaRomPath: Uri?) : RomConfigUpdateEvent()
+     data class GbaSavePathUpdate(val gbaSavePath: Uri?) : RomConfigUpdateEvent()
+     data class CustomNameUpdate(val customName: String?) : RomConfigUpdateEvent()
++    data class LaunchDisplayProfileUpdate(val profile: LaunchDisplayProfile) : RomConfigUpdateEvent()
+ }
+diff --git a/app/src/main/java/me/magnum/melonds/ui/romdetails/ui/RomConfigUi.kt b/app/src/main/java/me/magnum/melonds/ui/romdetails/ui/RomConfigUi.kt
+index 1e64d375..73fefb1e 100644
+--- a/app/src/main/java/me/magnum/melonds/ui/romdetails/ui/RomConfigUi.kt
++++ b/app/src/main/java/me/magnum/melonds/ui/romdetails/ui/RomConfigUi.kt
+@@ -20,6 +20,8 @@ import androidx.compose.foundation.verticalScroll
+ import androidx.compose.material.CircularProgressIndicator
+ import androidx.compose.material.MaterialTheme
+ import androidx.compose.runtime.Composable
++import androidx.compose.runtime.getValue
++import androidx.compose.runtime.produceState
+ import androidx.compose.ui.Alignment
+ import androidx.compose.ui.Modifier
+ import androidx.compose.ui.platform.LocalContext
+@@ -32,6 +34,10 @@ import me.magnum.melonds.common.Permission
+ import me.magnum.melonds.common.contracts.FilePickerContract
+ import me.magnum.melonds.domain.model.rom.Rom
+ import me.magnum.melonds.domain.model.rom.config.RomConfig
++import me.magnum.melonds.domain.model.rom.config.LaunchDisplayProfile
++import androidx.activity.ComponentActivity
++import androidx.window.layout.FoldingFeature
++import androidx.window.layout.WindowInfoTracker
+ import me.magnum.melonds.ui.common.MelonPreviewSet
+ import me.magnum.melonds.ui.common.component.dialog.TextInputDialog
+ import me.magnum.melonds.ui.common.component.dialog.rememberTextInputDialogState
+@@ -91,6 +97,32 @@ private fun Content(
+                 end = contentPadding.calculateEndPadding(LocalLayoutDirection.current),
+             ),
+     ) {
++        val context = LocalContext.current
++        val innerFoldableDisplay by produceState(initialValue = false, context) {
++            val activity = context as? ComponentActivity
++            if (activity != null) {
++                WindowInfoTracker.getOrCreate(context).windowLayoutInfo(activity).collect { info ->
++                    value = info.displayFeatures.any { it is FoldingFeature }
++                }
++            }
++        }
++        val launchProfiles = LaunchDisplayProfile.entries
++        val launchProfileLabels = stringArrayResource(R.array.kh_launch_display_profiles)
++        SingleChoiceItem(
++            name = stringResource(R.string.kh_launch_display_profile),
++            value = launchProfileLabels[romConfig.launchDisplayProfile.ordinal],
++            items = launchProfileLabels.toList(),
++            selectedItemIndex = romConfig.launchDisplayProfile.ordinal,
++            disabledItemIndices = if (innerFoldableDisplay) emptySet() else setOf(LaunchDisplayProfile.FLEX_MODE.ordinal),
++            onItemSelected = { onConfigUpdate(RomConfigUpdateEvent.LaunchDisplayProfileUpdate(launchProfiles[it])) },
++        )
++        androidx.compose.material.Text(
++            text = stringResource(R.string.kh_launch_display_profile_summary),
++            style = MaterialTheme.typography.caption,
++            color = MaterialTheme.colors.onSurface.copy(alpha = 0.68f),
++            modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 8.dp),
++        )
++
+         val renameDialogState = rememberTextInputDialogState()
+         ActionLauncherItem(
+             name = stringResource(id = R.string.label_rom_config_custom_name),
+@@ -115,7 +147,6 @@ private fun Content(
+         // were removed from the dialog — the same DSi/mic traps as the global settings,
+         // through another door. The plumbing below them is untouched.
+ 
+-        val context = LocalContext.current
+         val layoutSelectorLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+             if (result.resultCode == Activity.RESULT_OK) {
+                 val layoutId = result.data?.getStringExtra(LayoutSelectorActivity.KEY_SELECTED_LAYOUT_ID)?.let { UUID.fromString(it) }
+@@ -208,4 +239,4 @@ private fun PreviewRomConfigUi() {
+             onConfigUpdate = { },
+         )
+     }
+-}
+\ No newline at end of file
++}
+diff --git a/app/src/main/java/me/magnum/melonds/ui/romlist/RomListActivity.kt b/app/src/main/java/me/magnum/melonds/ui/romlist/RomListActivity.kt
+index 84b8f525..16aa79b6 100644
+--- a/app/src/main/java/me/magnum/melonds/ui/romlist/RomListActivity.kt
++++ b/app/src/main/java/me/magnum/melonds/ui/romlist/RomListActivity.kt
+@@ -26,6 +26,10 @@ import androidx.compose.ui.res.stringResource
+ import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
+ import androidx.lifecycle.compose.collectAsStateWithLifecycle
+ import androidx.lifecycle.lifecycleScope
++import androidx.lifecycle.Lifecycle
++import androidx.lifecycle.repeatOnLifecycle
++import androidx.window.layout.FoldingFeature
++import androidx.window.layout.WindowInfoTracker
+ import dagger.hilt.android.AndroidEntryPoint
+ import kotlinx.coroutines.flow.collectLatest
+ import kotlinx.coroutines.launch
+@@ -36,6 +40,7 @@ import me.magnum.melonds.domain.model.DownloadProgress
+ import me.magnum.melonds.domain.model.RomScanningStatus
+ import me.magnum.melonds.domain.model.appupdate.AppUpdate
+ import me.magnum.melonds.domain.model.rom.Rom
++import me.magnum.melonds.domain.model.rom.config.LaunchDisplayProfile
+ import me.magnum.melonds.parcelables.RomParcelable
+ import me.magnum.melonds.ui.common.melonTextButtonColors
+ import me.magnum.melonds.ui.common.rom.EmulatorLaunchValidatorDelegate
+@@ -68,6 +73,7 @@ class RomListActivity : AppCompatActivity() {
+     private var khAssetsPrompt by mutableStateOf<KhAssetsPrompt?>(null)
+     private var isMigratingKhAssets by mutableStateOf(false)
+     private var migrateKhAssetsAfterGrant = false
++    private var isFoldableInnerDisplay = false
+ 
+     // The all-files-access settings screen reports nothing back; re-check on return.
+     private val allFilesAccessLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+@@ -83,6 +89,14 @@ class RomListActivity : AppCompatActivity() {
+         enableEdgeToEdge(statusBarStyle = SystemBarStyle.dark(Color.TRANSPARENT))
+         super.onCreate(savedInstanceState)
+ 
++        lifecycleScope.launch {
++            lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
++                WindowInfoTracker.getOrCreate(this@RomListActivity).windowLayoutInfo(this@RomListActivity).collect { info ->
++                    isFoldableInnerDisplay = info.displayFeatures.any { it is FoldingFeature }
++                }
++            }
++        }
++
+         // [KHMM]
+         if (savedInstanceState == null && !khAssetsFolderManager.isSetupPromptHandled()) {
+             khAssetsPrompt = when {
+@@ -154,8 +168,12 @@ class RomListActivity : AppCompatActivity() {
+                     onSearchQueryChange = viewModel::setRomSearchQuery,
+                     onSortChange = viewModel::setRomSorting,
+                     onRomSelected = { rom ->
+-                        viewModel.setRomLastPlayedNow(rom)
+-                        emulatorLauncherValidatorDelegate.validateRom(rom)
++                        if (rom.config.launchDisplayProfile == LaunchDisplayProfile.FLEX_MODE && !isFoldableInnerDisplay) {
++                            Toast.makeText(this@RomListActivity, R.string.kh_flex_requires_inner_display, Toast.LENGTH_LONG).show()
++                        } else {
++                            viewModel.setRomLastPlayedNow(rom)
++                            emulatorLauncherValidatorDelegate.validateRom(rom)
++                        }
+                     },
+                     onRomConfigClick = { rom ->
+                         val intent = Intent(this@RomListActivity, RomDetailsActivity::class.java).apply {
+@@ -344,4 +362,4 @@ class RomListActivity : AppCompatActivity() {
+             Toast.makeText(this@RomListActivity, message, Toast.LENGTH_LONG).show()
+         }
+     }
+-}
+\ No newline at end of file
++}
+diff --git a/app/src/main/java/me/magnum/melonds/ui/romlist/ui/RomListScreen.kt b/app/src/main/java/me/magnum/melonds/ui/romlist/ui/RomListScreen.kt
+index ef7b7e27..d81f605c 100644
+--- a/app/src/main/java/me/magnum/melonds/ui/romlist/ui/RomListScreen.kt
++++ b/app/src/main/java/me/magnum/melonds/ui/romlist/ui/RomListScreen.kt
+@@ -6,6 +6,7 @@ import androidx.activity.compose.BackHandler
+ import androidx.compose.foundation.background
+ import androidx.compose.foundation.focusable
+ import androidx.compose.foundation.layout.Box
++import androidx.compose.foundation.layout.Column
+ import androidx.compose.foundation.layout.Row
+ import androidx.compose.foundation.layout.WindowInsets
+ import androidx.compose.foundation.layout.WindowInsetsSides
+@@ -59,7 +60,9 @@ import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+ import androidx.compose.ui.res.painterResource
+ import androidx.compose.ui.res.stringResource
+ import androidx.compose.ui.text.input.ImeAction
++import androidx.compose.ui.text.font.FontWeight
+ import androidx.compose.ui.unit.dp
++import androidx.compose.ui.unit.sp
+ import me.magnum.melonds.R
+ import me.magnum.melonds.domain.model.SortingMode
+ import me.magnum.melonds.domain.model.rom.Rom
+@@ -187,7 +190,16 @@ private fun RomListTopBar(
+ 
+     TopAppBar(
+         title = {
+-            Text(stringResource(R.string.app_name))
++            Column {
++                Text(stringResource(R.string.app_name))
++                Text(
++                    text = stringResource(R.string.kh_remix_subtitle),
++                    fontSize = 10.sp,
++                    lineHeight = 11.sp,
++                    fontWeight = FontWeight.Normal,
++                    color = MaterialTheme.colors.onPrimary.copy(alpha = 0.72f),
++                )
++            }
+         },
+         backgroundColor = MaterialTheme.colors.primary,
+         contentColor = MaterialTheme.colors.onPrimary,
+@@ -354,4 +366,4 @@ private fun SearchTopBar(
+             ),
+         )
+     }
+-}
+\ No newline at end of file
++}
+diff --git a/app/src/main/res/values/strings.xml b/app/src/main/res/values/strings.xml
+index 7ce5916d..373ef969 100644
+--- a/app/src/main/res/values/strings.xml
++++ b/app/src/main/res/values/strings.xml
+@@ -1,5 +1,16 @@
+ <resources xmlns:tools="http://schemas.android.com/tools">
+     <string name="app_name">Melon Mix</string>
++    <string name="kh_remix_subtitle">Saltlord’s Remix v1.0.7</string>
++    <string name="kh_launch_display_profile">Launch display profile</string>
++    <string name="kh_launch_display_profile_summary">Automatic follows the current screen and orientation. Locked profiles set orientation and layout before launch, preventing stretching after rotation. Changes apply the next time the game starts. Flex Mode requires the foldable inner display.</string>
++    <string-array name="kh_launch_display_profiles">
++        <item>Automatic</item>
++        <item>Portrait · 4:3</item>
++        <item>Landscape · 4:3</item>
++        <item>Landscape · Widescreen</item>
++        <item>Flex Mode</item>
++    </string-array>
++    <string name="kh_flex_requires_inner_display">Flex Mode requires the foldable inner display. Open the phone or select another launch profile.</string>
+ 
+     <string name="ok">OK</string>
+     <string name="yes">Yes</string>
+
