@@ -1,0 +1,57 @@
+diff --git a/app/src/main/java/me/magnum/melonds/impl/layout/UILayoutProvider.kt b/app/src/main/java/me/magnum/melonds/impl/layout/UILayoutProvider.kt
+--- a/app/src/main/java/me/magnum/melonds/impl/layout/UILayoutProvider.kt
++++ b/app/src/main/java/me/magnum/melonds/impl/layout/UILayoutProvider.kt
+@@ -134,9 +134,9 @@ class UILayoutProvider(
+             LaunchDisplayProfile.LANDSCAPE_WIDESCREEN -> aspectFit(safeRect, 16f / 9f)
+             LaunchDisplayProfile.FLEX_MODE -> {
+                 if (upperPanelRect == null) {
+-                    // The game is launched unfolded in landscape, then moves into the upper
+-                    // panel when the hinge becomes separating.
+-                    aspectFit(safeRect, 16f / 9f)
++                    // Launch unfolded using the full inner display. Once the hinge becomes
++                    // separating, the same profile moves into the physical upper panel.
++                    safeRect
+                 } else {
+                     val upperPanelWidthDp = upperPanelRect.width / context.resources.displayMetrics.density
+                     if (upperPanelWidthDp < 600f) aspectFit(upperPanelRect, 4f / 3f) else upperPanelRect
+diff --git a/app/src/main/java/me/magnum/melonds/ui/emulator/EmulatorActivity.kt b/app/src/main/java/me/magnum/melonds/ui/emulator/EmulatorActivity.kt
+--- a/app/src/main/java/me/magnum/melonds/ui/emulator/EmulatorActivity.kt
++++ b/app/src/main/java/me/magnum/melonds/ui/emulator/EmulatorActivity.kt
+@@ -411,7 +411,7 @@ class EmulatorActivity : AppCompatActivity() {
+                     // Explicit Flex video shares the committed gameplay viewport. Other launch
+                     // profiles retain the established fullscreen cinematic presentation.
+                     viewportBounds = khTopScreenRect.value.takeIf {
+-                        khLaunchDisplayProfile == LaunchDisplayProfile.FLEX_MODE && khFlexMode.value
++                        khLaunchDisplayProfile == LaunchDisplayProfile.FLEX_MODE
+                     },
+                     onEnded = { MelonEmulator.onKhCutsceneEnded() },
+                     onFailed = { MelonEmulator.onKhCutsceneFailed(it) },
+@@ -949,11 +949,7 @@ class EmulatorActivity : AppCompatActivity() {
+                     LaunchDisplayProfile.PORTRAIT_4_3,
+                     LaunchDisplayProfile.LANDSCAPE_4_3 -> 4f / 3f
+                     LaunchDisplayProfile.LANDSCAPE_WIDESCREEN -> 16f / 9f
+-                    LaunchDisplayProfile.FLEX_MODE -> if (khFlexMode.value) {
+-                        rect.width.toFloat() / rect.height
+-                    } else {
+-                        16f / 9f
+-                    }
++                    LaunchDisplayProfile.FLEX_MODE -> rect.width.toFloat() / rect.height
+                     LaunchDisplayProfile.AUTOMATIC -> rect.width.toFloat() / rect.height
+                 }
+                 MelonEmulator.setDisplayAspectRatio(aspectRatio)
+@@ -984,8 +980,13 @@ class EmulatorActivity : AppCompatActivity() {
+         when (khLaunchDisplayProfile) {
+             LaunchDisplayProfile.PORTRAIT_4_3,
+             LaunchDisplayProfile.LANDSCAPE_4_3 -> MelonEmulator.setDisplayAspectRatio(4f / 3f)
+-            LaunchDisplayProfile.LANDSCAPE_WIDESCREEN,
+-            LaunchDisplayProfile.FLEX_MODE -> MelonEmulator.setDisplayAspectRatio(16f / 9f)
++            LaunchDisplayProfile.LANDSCAPE_WIDESCREEN -> MelonEmulator.setDisplayAspectRatio(16f / 9f)
++            LaunchDisplayProfile.FLEX_MODE -> {
++                val metrics = resources.displayMetrics
++                if (metrics.widthPixels > 0 && metrics.heightPixels > 0) {
++                    MelonEmulator.setDisplayAspectRatio(metrics.widthPixels.toFloat() / metrics.heightPixels)
++                }
++            }
+             LaunchDisplayProfile.AUTOMATIC -> Unit
+         }
+     }
