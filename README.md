@@ -1,13 +1,30 @@
 # Melon Mix: Saltlord's Remix (Android)
 
-This is a personal project where I intend to create the ultimate Android version of KH DS on Android. AI has been heavily used in the creation of this fork. This is more of a passion project for myself to use as 358/2 days is my favourite game in the KH franchise and it's sad that there is no modern way to play this with ease. This fork aims to change that with completely customised touch controls, display ratios, screen positioning, overley layouts, context-relevant on screen controls and more. So far 358/2 days is working exactly as planned. Re:Coded to come next. Will release when this looks and feels like an app that all can use without issue.
+A personal passion project to create my ultimate way to play the Kingdom Hearts DS games on Android. 👑❤️
 
+358/2 Days is my favourite game in the KH franchise, and it’s always bothered me that there’s no easy, modern way to properly play it. So, despite not being an app developer, I decided to do something about it.
 
+This melonMix fork uses AI heavily throughout development and is being built specifically around Android and touch: custom controls, display ratios and positioning, context-sensitive buttons, tailored overlay layouts and more.
 
+358/2 Days is already working exactly how I envisioned it. Re:Coded is next.
 
+I’ll release it publicly once it looks and feels like a proper app that anyone can pick up and use without fuss, and I intend to keep it updated alongside the main melonMix project.
 
+I’m not an app developer. I’m just a crazy KH superfan who apparently decided a port of a port needed another port. 💀
 
-KH Melon Mix on Android.
+Bug reports will absolutely be welcome when some of you inevitably try this thing, and I’ll do my best to squash them.
+
+And a MASSIVE thank you to [Nireves333](https://github.com/Nireves333), the original developer behind the melonMix Android port. None of what I’m doing here would exist without the work they put into bringing melonMix to Android in the first place. This fork is built on top of their work, and I’m incredibly grateful to have it as the foundation for this ridiculous little passion project. 💗
+
+---
+
+# Original melonMix Android Port
+
+The following is the original README from Nireves333's melonMix Android port, which this fork is built upon.
+
+---
+
+#KH Melon Mix on Android. 
 
 I couldn't find an Android port of KH Melon Mix so I attempted to make one that runs on my Anbernic RG505. One
 widescreen screen, camera on the right stick, HD cutscenes, remastered music. It's
