@@ -1,6 +1,11 @@
-# Melon Mix (Android)
+# Melon Mix: Saltlord's Remix (Android)
 
 This is a personal project where I intend to create the ultimate Android version of KH DS on Android. AI has been heavily used in the creation of this fork. This is more of a passion project for myself to use as 358/2 days is my favourite game in the KH franchise and it's sad that there is no modern way to play this with ease. This fork aims to change that with completely customised touch controls, display ratios, screen positioning, overley layouts, context-relevant on screen controls and more. So far 358/2 days is working exactly as planned. Re:Coded to come next. Will release when this looks and feels like an app that all can use without issue.
+
+
+
+
+
 
 KH Melon Mix on Android.
 
