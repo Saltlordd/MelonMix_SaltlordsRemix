@@ -79,6 +79,7 @@ jobs:
 
       - name: Apply source compatibility corrections
         run: |
+          sed -i 's/versionCode = AppConfig.versionCode + 1006/versionCode = 11010/' app/build.gradle.kts
           sed -i 's/currentWindowAdaptiveInfoV2/currentWindowAdaptiveInfo/g' \
             app/src/main/java/me/magnum/melonds/ui/cheats/ui/cheatform/CheatForm.kt \
             app/src/main/java/me/magnum/melonds/ui/dsiwaremanager/ui/DSiWareRomListDialog.kt \
