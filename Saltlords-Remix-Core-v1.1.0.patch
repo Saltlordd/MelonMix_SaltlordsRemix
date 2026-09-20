@@ -1,0 +1,117 @@
+diff --git a/src/plugins/Plugin.cpp b/src/plugins/Plugin.cpp
+index f5c642d2..53c7f9fc 100644
+--- a/src/plugins/Plugin.cpp
++++ b/src/plugins/Plugin.cpp
+@@ -1476,8 +1476,18 @@ void Plugin::setAspectRatio(float aspectRatio)
+ 
+         u32 aspectRatioMenuAddress = getAspectRatioAddress();
+ 
+-        if (aspectRatioMenuAddress != 0 && nds->ARM7Read16(aspectRatioMenuAddress) == 0x00001555) {
+-            nds->ARM7Write16(aspectRatioMenuAddress, aspectRatioKey);
++        if (aspectRatioMenuAddress != 0)
++        {
++            const u16 currentAspectRatioKey = nds->ARM7Read16(aspectRatioMenuAddress);
++            // The previous implementation accepted only the untouched 4:3 sentinel. After
++            // the first write, every later fold/rotation update was therefore rejected and
++            // the 3D projection stretched to the new Android viewport. Accept our own last
++            // value as well, while still preserving any unrelated value written by the game.
++            if (currentAspectRatioKey == 0x1555 || currentAspectRatioKey == LastWrittenAspectRatioKey)
++            {
++                nds->ARM7Write16(aspectRatioMenuAddress, aspectRatioKey);
++                LastWrittenAspectRatioKey = static_cast<u16>(aspectRatioKey);
++            }
+         }
+     }
+ 
+@@ -1678,4 +1688,4 @@ void Plugin::ramSearch(melonDS::NDS* nds, u32 HotkeyPress) {
+     }
+ }
+ 
+-}
+\ No newline at end of file
++}
+diff --git a/src/plugins/Plugin.h b/src/plugins/Plugin.h
+index 5c16ceb6..d67e8d53 100644
+--- a/src/plugins/Plugin.h
++++ b/src/plugins/Plugin.h
+@@ -298,6 +298,8 @@ public:
+     virtual bool isMobiCutsceneGameScene() {return false;};
+     virtual bool isInEngineCutsceneGameScene() {return false;};
+     virtual bool isCutsceneGameScene() {return false;};
++    virtual bool shouldHideNonessentialTouchControls() { return isCutsceneGameScene(); }
++    virtual int touchControlSceneMode() { return shouldHideNonessentialTouchControls() ? 2 : 0; }
+     virtual bool didMobiCutsceneEnded() {return !isCutsceneGameScene();};
+     virtual bool didInEngineCutsceneEnded() {return !isCutsceneGameScene();};
+     virtual bool canReturnToGameAfterReplacementCutscene() {return true;};
+@@ -493,6 +495,10 @@ protected:
+ 
+     int InternalResolutionScale = 1;
+     float AspectRatio = 0;
++    // [KHMM v22] Last aspect key written into game memory. Live window/fold transitions may
++    // update our own value again, but must not overwrite a value changed independently by the
++    // game. The stock sentinel is 0x1555 (4:3).
++    u16 LastWrittenAspectRatioKey = 0x1555;
+     int PriorGameScene = -1;
+     int GameScene = -1;
+     int GameSceneState = -1;
+diff --git a/src/plugins/PluginKingdomHeartsDays.cpp b/src/plugins/PluginKingdomHeartsDays.cpp
+index 175603dd..12eb2c81 100644
+--- a/src/plugins/PluginKingdomHeartsDays.cpp
++++ b/src/plugins/PluginKingdomHeartsDays.cpp
+@@ -199,6 +199,13 @@ enum
+     gameScene_Other
+ };
+ 
++int PluginKingdomHeartsDays::touchControlSceneMode()
++{
++    if (GameScene == gameScene_InGameWithMap && isCharacterControllable && !isDialogVisible()) return 0;
++    if (GameScene == gameScene_InGameMenu || GameScene == gameScene_ConfigMenu) return 1;
++    return 2;
++}
++
+ enum
+ {
+     gameSceneState_showHud,
+diff --git a/src/plugins/PluginKingdomHeartsDays.h b/src/plugins/PluginKingdomHeartsDays.h
+index d2dabdfb..b529af1c 100644
+--- a/src/plugins/PluginKingdomHeartsDays.h
++++ b/src/plugins/PluginKingdomHeartsDays.h
+@@ -177,6 +177,7 @@ private:
+     bool isMobiCutsceneGameScene() override;
+     bool isInEngineCutsceneGameScene() override;
+     bool isCutsceneGameScene() override;
++    int touchControlSceneMode() override;
+     bool didMobiCutsceneEnded() override;
+     bool didInEngineCutsceneEnded() override;
+     bool canReturnToGameAfterReplacementCutscene() override;
+diff --git a/src/plugins/PluginKingdomHeartsReCoded.cpp b/src/plugins/PluginKingdomHeartsReCoded.cpp
+index 92b502db..35907b10 100644
+--- a/src/plugins/PluginKingdomHeartsReCoded.cpp
++++ b/src/plugins/PluginKingdomHeartsReCoded.cpp
+@@ -197,6 +197,14 @@ enum
+     gameScene_Other                     // 19
+ };
+ 
++int PluginKingdomHeartsReCoded::touchControlSceneMode()
++{
++    const bool gameplay = GameScene == gameScene_InGameWithMap || GameScene == gameScene_InGameOlympusBattle;
++    if (gameplay && !isDialogVisible() && !isCutsceneGameScene()) return 0;
++    if (GameScene == gameScene_InGameMenu) return 1;
++    return 2;
++}
++
+ enum
+ {
+     gameSceneState_showHud,
+diff --git a/src/plugins/PluginKingdomHeartsReCoded.h b/src/plugins/PluginKingdomHeartsReCoded.h
+index 0694f236..8df6510d 100644
+--- a/src/plugins/PluginKingdomHeartsReCoded.h
++++ b/src/plugins/PluginKingdomHeartsReCoded.h
+@@ -145,6 +145,7 @@ private:
+     bool isMobiCutsceneGameScene() override;
+     bool isInEngineCutsceneGameScene() override;
+     bool isCutsceneGameScene() override;
++    int touchControlSceneMode() override;
+     bool didMobiCutsceneEnded() override;
+     bool didInEngineCutsceneEnded() override;
+     bool canReturnToGameAfterReplacementCutscene() override;
