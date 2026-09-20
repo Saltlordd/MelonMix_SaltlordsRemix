@@ -30,10 +30,13 @@ jobs:
         with:
           packages: >-
             platform-tools
-            platforms;android-37
-            build-tools;37.0.0
+            platforms;android-36
+            build-tools;36.0.0
             ndk;28.0.13004108
             cmake;3.22.1
+
+      - name: Configure stable Android API level
+        run: sed -i 's/compileSdkVersion = 37/compileSdkVersion = 36/' buildSrc/src/main/kotlin/AppConfig.kt
 
       - name: Restore permanent Saltlord's Remix signing identity
         env:
