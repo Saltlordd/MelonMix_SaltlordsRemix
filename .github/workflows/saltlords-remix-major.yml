@@ -22,20 +22,18 @@ jobs:
           distribution: zulu
           cache: gradle
 
-      # GitHub's ubuntu-latest runner already includes the Android command-line
-      # tools. android-actions/setup-android@v3 currently asks sdkmanager for
-      # the retired package named "tools", which makes the job fail before any
-      # Remix source is patched or compiled. Install only the concrete SDK
-      # components this project actually requires.
+      # Override setup-android's obsolete default package list (which includes
+      # the retired package named "tools") while still letting the action make
+      # sdkmanager available on the runner.
       - name: Install required Android SDK components
-        run: |
-          yes | sdkmanager --licenses >/dev/null || true
-          sdkmanager \
-            "platform-tools" \
-            "platforms;android-37" \
-            "build-tools;37.0.0" \
-            "ndk;28.0.13004108" \
-            "cmake;3.22.1"
+        uses: android-actions/setup-android@v3
+        with:
+          packages: >-
+            platform-tools
+            platforms;android-37
+            build-tools;37.0.0
+            ndk;28.0.13004108
+            cmake;3.22.1
 
       - name: Restore permanent Saltlord's Remix signing identity
         env:
