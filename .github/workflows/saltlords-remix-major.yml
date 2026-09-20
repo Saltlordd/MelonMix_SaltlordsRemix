@@ -22,9 +22,6 @@ jobs:
           distribution: zulu
           cache: gradle
 
-      # Override setup-android's obsolete default package list (which includes
-      # the retired package named "tools") while still letting the action make
-      # sdkmanager available on the runner.
       - name: Install required Android SDK components
         uses: android-actions/setup-android@v3
         with:
@@ -35,12 +32,11 @@ jobs:
             ndk;28.0.13004108
             cmake;3.22.1
 
-      # Keep the current catalog (including newer Room and Media3 aliases), but
-      # pin only the versions raised by upstream's unavailable API-37 toolchain.
       - name: Pin reproducible API 36 Android dependencies
         run: |
           sed -i \
             -e 's/appCompat = "1.8.0"/appCompat = "1.7.1"/' \
+            -e 's/composeBom = "2026.08.00"/composeBom = "2026.05.00"/' \
             -e 's/constraintLayout = "2.2.2"/constraintLayout = "2.2.1"/' \
             -e 's/core = "1.19.0"/core = "1.18.0"/' \
             -e 's/fragment = "1.9.0"/fragment = "1.8.9"/' \
@@ -57,7 +53,7 @@ jobs:
           sed -i 's/compileSdkVersion = 37/compileSdkVersion = 36/' buildSrc/src/main/kotlin/AppConfig.kt
           grep -F 'room = { id = "androidx.room"' gradle/libs.versions.toml
           grep -F 'androidx-media3-exoplayer' gradle/libs.versions.toml
-          grep -F 'composeBom = "2026.08.00"' gradle/libs.versions.toml
+          grep -F 'composeBom = "2026.05.00"' gradle/libs.versions.toml
 
       - name: Restore permanent Saltlord's Remix signing identity
         env:
@@ -79,17 +75,18 @@ jobs:
           } >> local.properties
 
       - name: Apply consolidated Saltlord's Remix app changes
-        # README.md has continued evolving in the public repository since this
-        # consolidated patch was generated. Preserve that live documentation
-        # instead of allowing its stale patch hunk to block every source change.
         run: git apply --binary --exclude=README.md Saltlords-Remix-Major-v1.1.0.patch
 
       - name: Apply source compatibility corrections
         run: |
-          # Modifier.weight is supplied by ColumnScope; explicitly importing the
-          # newer internal implementation breaks Kotlin compilation.
+          sed -i 's/currentWindowAdaptiveInfoV2/currentWindowAdaptiveInfo/g' \
+            app/src/main/java/me/magnum/melonds/ui/cheats/ui/cheatform/CheatForm.kt \
+            app/src/main/java/me/magnum/melonds/ui/dsiwaremanager/ui/DSiWareRomListDialog.kt \
+            app/src/main/java/me/magnum/melonds/ui/romdetails/ui/RomHeaderUi.kt
           sed -i '/^import androidx\.compose\.foundation\.layout\.weight$/d' \
             app/src/main/java/me/magnum/melonds/ui/romlist/ui/RemixGuideUi.kt
+          ! grep -R -E 'currentWindowAdaptiveInfoV2|^import androidx\.compose\.foundation\.layout\.weight$' \
+            app/src/main/java
 
       - name: Apply Saltlord's Remix native-core delta
         run: git -C melonDS-android-lib apply ../Saltlords-Remix-Core-v1.1.0.patch
