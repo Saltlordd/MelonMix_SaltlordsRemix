@@ -30,13 +30,16 @@ jobs:
         with:
           packages: >-
             platform-tools
-            platforms;android-36
-            build-tools;36.0.0
             ndk;28.0.13004108
             cmake;3.22.1
 
-      - name: Configure stable Android API level
-        run: sed -i 's/compileSdkVersion = 37/compileSdkVersion = 36/' buildSrc/src/main/kotlin/AppConfig.kt
+      # API 37 is currently published on Google's preview/canary SDK channel.
+      # Current AndroidX Compose dependencies require it at compile time.
+      - name: Install Android API 37 preview platform
+        run: |
+          sdkmanager --channel=3 \
+            "platforms;android-37" \
+            "build-tools;37.0.0"
 
       - name: Restore permanent Saltlord's Remix signing identity
         env:
