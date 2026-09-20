@@ -1,0 +1,67 @@
+name: Saltlord's Remix 1.1.0 - Major Build
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - master
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out complete source
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up Java 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: "21"
+          distribution: zulu
+          cache: gradle
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Restore permanent Saltlord's Remix signing identity
+        env:
+          KHDS_KEYSTORE_BASE64: ${{ secrets.KHDS_KEYSTORE_BASE64 }}
+          KHDS_KEYSTORE_PASSWORD: ${{ secrets.KHDS_KEYSTORE_PASSWORD }}
+          KHDS_KEY_ALIAS: ${{ secrets.KHDS_KEY_ALIAS }}
+          KHDS_KEY_PASSWORD: ${{ secrets.KHDS_KEY_PASSWORD }}
+        run: |
+          test -n "$KHDS_KEYSTORE_BASE64" || { echo "Missing KHDS_KEYSTORE_BASE64 repository secret"; exit 1; }
+          test -n "$KHDS_KEYSTORE_PASSWORD" || { echo "Missing KHDS_KEYSTORE_PASSWORD repository secret"; exit 1; }
+          test -n "$KHDS_KEY_ALIAS" || { echo "Missing KHDS_KEY_ALIAS repository secret"; exit 1; }
+          test -n "$KHDS_KEY_PASSWORD" || { echo "Missing KHDS_KEY_PASSWORD repository secret"; exit 1; }
+          printf '%s' "$KHDS_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/saltlords-remix.jks"
+          {
+            echo "MELONDS_KEYSTORE=$RUNNER_TEMP/saltlords-remix.jks"
+            echo "MELONDS_KEYSTORE_PASSWORD=$KHDS_KEYSTORE_PASSWORD"
+            echo "MELONDS_KEY_ALIAS=$KHDS_KEY_ALIAS"
+            echo "MELONDS_KEY_PASSWORD=$KHDS_KEY_PASSWORD"
+          } >> local.properties
+
+      - name: Apply consolidated Saltlord's Remix app changes
+        run: git apply --binary Saltlords-Remix-Major-v1.1.0.patch
+
+      - name: Apply Saltlord's Remix native-core delta
+        run: git -C melonDS-android-lib apply ../Saltlords-Remix-Core-v1.1.0.patch
+
+      - name: Validate patched source whitespace
+        run: git diff --check
+
+      - name: Build update-compatible playtest APK
+        run: |
+          chmod +x gradlew
+          ./gradlew :app:assembleGitHubProdDebug --stacktrace
+
+      - name: Upload Saltlord's Remix APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Saltlords-Remix-1.1.0-Major-Build
+          path: app/build/outputs/apk/gitHubProd/debug/*.apk
+          if-no-files-found: error
+          retention-days: 14

@@ -4,11 +4,8 @@ name: melonDS Android Nightly Build
 
 # Controls when the action will run.
 on:
-  # Triggers the workflow on push to any branch
-  push:
-    branches: [ '**' ]
-
-  # Allows you to run this workflow manually from the Actions tab
+  # Retained for upstream/nightly maintenance, but no longer competes with the
+  # dedicated Saltlord's Remix workflow on every source push.
   workflow_dispatch:
 
 # A workflow run is made up of one or more jobs that can run sequentially or in parallel
