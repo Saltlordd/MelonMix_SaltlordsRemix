@@ -58,7 +58,10 @@ jobs:
           } >> local.properties
 
       - name: Apply consolidated Saltlord's Remix app changes
-        run: git apply --binary Saltlords-Remix-Major-v1.1.0.patch
+        # README.md has continued evolving in the public repository since this
+        # consolidated patch was generated. Preserve that live documentation
+        # instead of allowing its stale patch hunk to block every source change.
+        run: git apply --binary --exclude=README.md Saltlords-Remix-Major-v1.1.0.patch
 
       - name: Apply Saltlord's Remix native-core delta
         run: git -C melonDS-android-lib apply ../Saltlords-Remix-Core-v1.1.0.patch
