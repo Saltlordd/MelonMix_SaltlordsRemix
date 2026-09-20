@@ -30,16 +30,19 @@ jobs:
         with:
           packages: >-
             platform-tools
+            platforms;android-36
+            build-tools;36.0.0
             ndk;28.0.13004108
             cmake;3.22.1
 
-      # API 37 is currently published on Google's preview/canary SDK channel.
-      # Current AndroidX Compose dependencies require it at compile time.
-      - name: Install Android API 37 preview platform
+      # Upstream's Android-17 dependency bump references an SDK platform that
+      # Google does not currently publish to sdkmanager. Restore the repository's
+      # immediately preceding, fully pinned API-36 dependency catalog. This keeps
+      # builds reproducible instead of resolving an unavailable toolchain.
+      - name: Pin reproducible API 36 Android dependencies
         run: |
-          sdkmanager --channel=3 \
-            "platforms;android-37" \
-            "build-tools;37.0.0"
+          git show db56f39be350bb414d21b86c953da9da17892f4c^:gradle/libs.versions.toml > gradle/libs.versions.toml
+          sed -i 's/compileSdkVersion = 37/compileSdkVersion = 36/' buildSrc/src/main/kotlin/AppConfig.kt
 
       - name: Restore permanent Saltlord's Remix signing identity
         env:
