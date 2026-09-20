@@ -13,6 +13,9 @@ jobs:
       - name: Check out complete source
         uses: actions/checkout@v4
         with:
+          # Required because the reproducible API-36 dependency catalog is
+          # restored from a known commit immediately before the API-37 bump.
+          fetch-depth: 0
           submodules: recursive
 
       - name: Set up Java 21
