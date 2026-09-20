@@ -41,7 +41,6 @@ jobs:
         run: |
           sed -i \
             -e 's/appCompat = "1.8.0"/appCompat = "1.7.1"/' \
-            -e 's/composeBom = "2026.08.00"/composeBom = "2026.05.00"/' \
             -e 's/constraintLayout = "2.2.2"/constraintLayout = "2.2.1"/' \
             -e 's/core = "1.19.0"/core = "1.18.0"/' \
             -e 's/fragment = "1.9.0"/fragment = "1.8.9"/' \
@@ -58,7 +57,7 @@ jobs:
           sed -i 's/compileSdkVersion = 37/compileSdkVersion = 36/' buildSrc/src/main/kotlin/AppConfig.kt
           grep -F 'room = { id = "androidx.room"' gradle/libs.versions.toml
           grep -F 'androidx-media3-exoplayer' gradle/libs.versions.toml
-          grep -F 'composeBom = "2026.05.00"' gradle/libs.versions.toml
+          grep -F 'composeBom = "2026.08.00"' gradle/libs.versions.toml
 
       - name: Restore permanent Saltlord's Remix signing identity
         env:
@@ -84,6 +83,13 @@ jobs:
         # consolidated patch was generated. Preserve that live documentation
         # instead of allowing its stale patch hunk to block every source change.
         run: git apply --binary --exclude=README.md Saltlords-Remix-Major-v1.1.0.patch
+
+      - name: Apply source compatibility corrections
+        run: |
+          # Modifier.weight is supplied by ColumnScope; explicitly importing the
+          # newer internal implementation breaks Kotlin compilation.
+          sed -i '/^import androidx\.compose\.foundation\.layout\.weight$/d' \
+            app/src/main/java/me/magnum/melonds/ui/romlist/ui/RemixGuideUi.kt
 
       - name: Apply Saltlord's Remix native-core delta
         run: git -C melonDS-android-lib apply ../Saltlords-Remix-Core-v1.1.0.patch
