@@ -91,7 +91,7 @@ jobs:
         run: git apply --exclude=app/src/main/java/me/magnum/melonds/impl/InternalLayoutsRepository.kt --exclude=app/src/main/java/me/magnum/melonds/ui/emulator/RuntimeLayoutView.kt Saltlords-Remix-First-Edition-v2.patch
 
       - name: Apply release-candidate polish
-        run: git apply --binary Saltlords-Remix-Release-Candidate-Polish-v1.patch
+        run: git apply --binary Saltlords-Remix-Release-Candidate-Polish-v2.patch
 
       - name: Apply source compatibility corrections
         run: |
