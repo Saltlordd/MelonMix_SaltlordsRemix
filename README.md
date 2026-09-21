@@ -93,7 +93,7 @@ Current work includes:
 - Improving the **Layout Editor**, including clearer Snap-to-Grid behaviour and a visible alignment grid.
 - Finalising the newest **default touchscreen layouts** for different display and orientation configurations.
 - Expanding the **Kingdom Hearts-style frontend menu sounds** while keeping them subtle enough that they don't drive everyone insane.
-- Tightening the game library around the **two games Saltlord's Remix is actually designed for**. No Pokémon or ambiguous other will run in this hen house.
+- Tightening the game library around the **two games Saltlord's Remix is actually designed for**. No Pokémon in this hen house.
 - Continuing to improve behaviour across different Android display sizes and form factors.
 - General bug fixing, regression testing and polishing the app until somebody can install it without needing me standing behind them explaining what seventeen different settings do.
 
