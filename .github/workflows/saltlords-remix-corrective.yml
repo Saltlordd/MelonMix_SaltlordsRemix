@@ -96,6 +96,14 @@ jobs:
       - name: Apply corrective runtime wiring
         run: git apply --binary Saltlords-Remix-Corrective-PreRelease-v3.patch
 
+      - name: Restore missing cinematic orientation type and update Action artwork
+        run: |
+          git apply --check Saltlords-Remix-Corrective-BuildFix-ActionIcon-v1.patch
+          git apply Saltlords-Remix-Corrective-BuildFix-ActionIcon-v1.patch
+          test -f app/src/main/java/me/magnum/melonds/domain/model/rom/config/HdCinematicOrientation.kt
+          grep -F "enum class HdCinematicOrientation" app/src/main/java/me/magnum/melonds/domain/model/rom/config/HdCinematicOrientation.kt
+          grep -F "Geometric, open-handled action glyph" app/src/main/java/me/magnum/melonds/ui/common/input/KhActionButtonView.kt
+
       - name: Apply source compatibility corrections
         run: |
           # Stay above every historical Remix playtest version so Android treats
