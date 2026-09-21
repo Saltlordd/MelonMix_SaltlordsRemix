@@ -1,0 +1,137 @@
+name: Saltlord's Remix 1.1.0 - Major Build
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - master
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out complete source
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up Java 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: "21"
+          distribution: zulu
+          cache: gradle
+
+      # Override setup-android's obsolete default package list (which includes
+      # the retired package named "tools") while still letting the action make
+      # sdkmanager available on the runner.
+      - name: Install required Android SDK components
+        uses: android-actions/setup-android@v3
+        with:
+          packages: >-
+            platform-tools
+            platforms;android-36
+            build-tools;36.0.0
+            ndk;28.0.13004108
+            cmake;3.22.1
+
+      # Keep the current catalog (including newer Room and Media3 aliases), but
+      # pin only the versions raised by upstream's unavailable API-37 toolchain.
+      - name: Pin reproducible API 36 Android dependencies
+        run: |
+          sed -i \
+            -e 's/appCompat = "1.8.0"/appCompat = "1.7.1"/' \
+            -e 's/composeBom = "2026.08.00"/composeBom = "2026.05.00"/' \
+            -e 's/constraintLayout = "2.2.2"/constraintLayout = "2.2.1"/' \
+            -e 's/core = "1.19.0"/core = "1.18.0"/' \
+            -e 's/fragment = "1.9.0"/fragment = "1.8.9"/' \
+            -e 's/gradle = "9.3.1"/gradle = "9.2.1"/' \
+            -e 's/hiltX = "1.4.0"/hiltX = "1.3.0"/' \
+            -e 's/hilt = "2.60.1"/hilt = "2.59.2"/' \
+            -e 's/kotlin = "2.4.10"/kotlin = "2.3.21"/' \
+            -e 's/kotlinxCoroutines = "1.11.0"/kotlinxCoroutines = "1.10.2"/' \
+            -e 's/ksp = "2.3.6"/ksp = "2.3.4"/' \
+            -e 's/lifecycleViewModel = "2.11.0"/lifecycleViewModel = "2.10.0"/' \
+            -e 's/material = "1.14.0"/material = "1.13.0"/' \
+            -e 's/okHttp = "5.5.0"/okHttp = "5.3.2"/' \
+            gradle/libs.versions.toml
+          sed -i 's/compileSdkVersion = 37/compileSdkVersion = 36/' buildSrc/src/main/kotlin/AppConfig.kt
+          grep -F 'room = { id = "androidx.room"' gradle/libs.versions.toml
+          grep -F 'androidx-media3-exoplayer' gradle/libs.versions.toml
+          grep -F 'composeBom = "2026.05.00"' gradle/libs.versions.toml
+
+      - name: Restore permanent Saltlord's Remix signing identity
+        env:
+          KHDS_KEYSTORE_BASE64: ${{ secrets.KHDS_KEYSTORE_BASE64 }}
+          KHDS_KEYSTORE_PASSWORD: ${{ secrets.KHDS_KEYSTORE_PASSWORD }}
+          KHDS_KEY_ALIAS: ${{ secrets.KHDS_KEY_ALIAS }}
+          KHDS_KEY_PASSWORD: ${{ secrets.KHDS_KEY_PASSWORD }}
+        run: |
+          test -n "$KHDS_KEYSTORE_BASE64" || { echo "Missing KHDS_KEYSTORE_BASE64 repository secret"; exit 1; }
+          test -n "$KHDS_KEYSTORE_PASSWORD" || { echo "Missing KHDS_KEYSTORE_PASSWORD repository secret"; exit 1; }
+          test -n "$KHDS_KEY_ALIAS" || { echo "Missing KHDS_KEY_ALIAS repository secret"; exit 1; }
+          test -n "$KHDS_KEY_PASSWORD" || { echo "Missing KHDS_KEY_PASSWORD repository secret"; exit 1; }
+          printf '%s' "$KHDS_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/saltlords-remix.jks"
+          {
+            echo "MELONDS_KEYSTORE=$RUNNER_TEMP/saltlords-remix.jks"
+            echo "MELONDS_KEYSTORE_PASSWORD=$KHDS_KEYSTORE_PASSWORD"
+            echo "MELONDS_KEY_ALIAS=$KHDS_KEY_ALIAS"
+            echo "MELONDS_KEY_PASSWORD=$KHDS_KEY_PASSWORD"
+          } >> local.properties
+
+      - name: Apply consolidated Saltlord's Remix app changes
+        # README.md has continued evolving in the public repository since this
+        # consolidated patch was generated. Preserve that live documentation
+        # instead of allowing its stale patch hunk to block every source change.
+        run: git apply --binary --exclude=README.md Saltlords-Remix-Major-v1.1.0.patch
+
+      - name: Apply first-edition public-release corrections
+        # These two files were already revised in the consolidated major patch;
+        # their corrected complete versions are in the release-candidate delta.
+        run: git apply --exclude=app/src/main/java/me/magnum/melonds/impl/InternalLayoutsRepository.kt --exclude=app/src/main/java/me/magnum/melonds/ui/emulator/RuntimeLayoutView.kt Saltlords-Remix-First-Edition-v2.patch
+
+      - name: Apply release-candidate polish
+        run: git apply --binary Saltlords-Remix-Release-Candidate-Polish-v3.patch
+
+      - name: Apply corrective runtime wiring
+        run: git apply --binary Saltlords-Remix-Corrective-PreRelease-v3.patch
+
+      - name: Apply source compatibility corrections
+        run: |
+          # Stay above every historical Remix playtest version so Android treats
+          # this signed build as an update rather than a prohibited downgrade.
+          sed -i 's/versionCode = AppConfig.versionCode + 1006/versionCode = 11013/' \
+            app/build.gradle.kts
+          # The API-36 Compose set exposes currentWindowAdaptiveInfo rather than
+          # the API-37-only V2 spelling. Its windowSizeClass contract is the same
+          # for these three call sites.
+          sed -i 's/currentWindowAdaptiveInfoV2/currentWindowAdaptiveInfo/g' \
+            app/src/main/java/me/magnum/melonds/ui/cheats/ui/cheatform/CheatForm.kt \
+            app/src/main/java/me/magnum/melonds/ui/dsiwaremanager/ui/DSiWareRomListDialog.kt \
+            app/src/main/java/me/magnum/melonds/ui/romdetails/ui/RomHeaderUi.kt
+          # Modifier.weight is supplied by ColumnScope; explicitly importing the
+          # newer internal implementation breaks Kotlin compilation.
+          sed -i '/^import androidx\.compose\.foundation\.layout\.weight$/d' \
+            app/src/main/java/me/magnum/melonds/ui/romlist/ui/RemixGuideUi.kt
+          ! grep -R -E 'currentWindowAdaptiveInfoV2|^import androidx\.compose\.foundation\.layout\.weight$' \
+            app/src/main/java
+          grep -F 'versionCode = 11013' app/build.gradle.kts
+
+      - name: Apply Saltlord's Remix native-core delta
+        run: git -C melonDS-android-lib apply ../Saltlords-Remix-Core-v1.1.0.patch
+
+      - name: Validate patched source whitespace
+        run: git diff --check
+
+      - name: Build update-compatible playtest APK
+        run: |
+          chmod +x gradlew
+          ./gradlew :app:assembleGitHubProdDebug --stacktrace
+
+      - name: Upload Saltlord's Remix APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Saltlords-Remix-1.1.2-Corrective-Playtest
+          path: app/build/outputs/apk/gitHubProd/debug/*.apk
+          if-no-files-found: error
+          retention-days: 14
