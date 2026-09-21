@@ -104,13 +104,34 @@ jobs:
           grep -F "enum class HdCinematicOrientation" app/src/main/java/me/magnum/melonds/domain/model/rom/config/HdCinematicOrientation.kt
           grep -F "Geometric, open-handled action glyph" app/src/main/java/me/magnum/melonds/ui/common/input/KhActionButtonView.kt
 
-      - name: Reconcile the live library, Guide and strings revisions
-        # Three older patches target a guide revision predating this repository
-        # commit. The bridge carries only the omitted final versions of those
-        # files; the other patch hunks still apply in their original order.
+      - name: Reconcile the library and Guide revisions
+        # Three older patches target earlier library and Guide revisions.
+        # The bridge carries only those two final versions; the string labels
+        # are checked separately against the current repository file.
         run: |
-          git apply --check Saltlords-Remix-Workflow-Bridge-v1.patch
-          git apply Saltlords-Remix-Workflow-Bridge-v1.patch
+          git apply --check Saltlords-Remix-Workflow-Bridge-v2.patch
+          git apply Saltlords-Remix-Workflow-Bridge-v2.patch
+          # The repository's strings.xml can carry either the earlier or
+          # current cinematic wording. Supply only missing labels without
+          # applying a stale context hunk or duplicating existing strings.
+          python3 - <<'PYSTRINGS'
+          from pathlib import Path
+          import re
+          import xml.etree.ElementTree as ET
+          path = Path('app/src/main/res/values/strings.xml')
+          content = path.read_text()
+          labels = {
+              'kh_cinematic_landscape_direction': 'Cinematic landscape direction',
+              'input_kh_cinematic_rotate': 'Cinematic Rotate',
+          }
+          for key, value in labels.items():
+              if not re.search(r'<string\s+name="' + re.escape(key) + r'"', content):
+                  content = content.replace('</resources>', '    <string name="' + key + '">' + value + '</string>\n</resources>')
+          path.write_text(content)
+          root = ET.fromstring(content)
+          for key in labels:
+              assert sum(item.attrib.get('name') == key for item in root.findall('string')) == 1, key
+          PYSTRINGS
 
       - name: Apply final pre-release polish and icon pack
         run: |
