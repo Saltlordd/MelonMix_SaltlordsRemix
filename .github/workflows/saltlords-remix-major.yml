@@ -91,7 +91,7 @@ jobs:
         run: git apply --exclude=app/src/main/java/me/magnum/melonds/impl/InternalLayoutsRepository.kt --exclude=app/src/main/java/me/magnum/melonds/ui/emulator/RuntimeLayoutView.kt Saltlords-Remix-First-Edition-v2.patch
 
       - name: Apply release-candidate polish
-        run: git apply --binary Saltlords-Remix-Release-Candidate-Polish-v2.patch
+        run: git apply --binary Saltlords-Remix-Release-Candidate-Polish-v3.patch
 
       - name: Apply source compatibility corrections
         run: |
@@ -110,12 +110,6 @@ jobs:
           # newer internal implementation breaks Kotlin compilation.
           sed -i '/^import androidx\.compose\.foundation\.layout\.weight$/d' \
             app/src/main/java/me/magnum/melonds/ui/romlist/ui/RemixGuideUi.kt
-          # The consolidated major patch already includes the cinematic Rotate
-          # enum and label. Guard against duplicate entries from older workflows.
-          grep -F 'BUTTON_KH_CINEMATIC_ROTATE(emptyList())' \
-            app/src/main/java/me/magnum/melonds/domain/model/layout/LayoutComponent.kt
-          grep -F 'LayoutComponent.BUTTON_KH_CINEMATIC_ROTATE -> R.string.input_kh_cinematic_rotate' \
-            app/src/main/java/me/magnum/melonds/utils/InputUtils.kt
           ! grep -R -E 'currentWindowAdaptiveInfoV2|^import androidx\.compose\.foundation\.layout\.weight$' \
             app/src/main/java
           grep -F 'versionCode = 11012' app/build.gradle.kts
