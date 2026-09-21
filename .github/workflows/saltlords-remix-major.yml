@@ -22,6 +22,9 @@ jobs:
           distribution: zulu
           cache: gradle
 
+      # Override setup-android's obsolete default package list (which includes
+      # the retired package named "tools") while still letting the action make
+      # sdkmanager available on the runner.
       - name: Install required Android SDK components
         uses: android-actions/setup-android@v3
         with:
@@ -32,6 +35,8 @@ jobs:
             ndk;28.0.13004108
             cmake;3.22.1
 
+      # Keep the current catalog (including newer Room and Media3 aliases), but
+      # pin only the versions raised by upstream's unavailable API-37 toolchain.
       - name: Pin reproducible API 36 Android dependencies
         run: |
           sed -i \
@@ -75,19 +80,34 @@ jobs:
           } >> local.properties
 
       - name: Apply consolidated Saltlord's Remix app changes
+        # README.md has continued evolving in the public repository since this
+        # consolidated patch was generated. Preserve that live documentation
+        # instead of allowing its stale patch hunk to block every source change.
         run: git apply --binary --exclude=README.md Saltlords-Remix-Major-v1.1.0.patch
+
+      - name: Apply first-edition public-release corrections
+        run: git apply Saltlords-Remix-First-Edition-v2.patch
 
       - name: Apply source compatibility corrections
         run: |
-          sed -i 's/versionCode = AppConfig.versionCode + 1006/versionCode = 11010/' app/build.gradle.kts
+          # Stay above every historical Remix playtest version so Android treats
+          # this signed build as an update rather than a prohibited downgrade.
+          sed -i 's/versionCode = AppConfig.versionCode + 1006/versionCode = 11011/' \
+            app/build.gradle.kts
+          # The API-36 Compose set exposes currentWindowAdaptiveInfo rather than
+          # the API-37-only V2 spelling. Its windowSizeClass contract is the same
+          # for these three call sites.
           sed -i 's/currentWindowAdaptiveInfoV2/currentWindowAdaptiveInfo/g' \
             app/src/main/java/me/magnum/melonds/ui/cheats/ui/cheatform/CheatForm.kt \
             app/src/main/java/me/magnum/melonds/ui/dsiwaremanager/ui/DSiWareRomListDialog.kt \
             app/src/main/java/me/magnum/melonds/ui/romdetails/ui/RomHeaderUi.kt
+          # Modifier.weight is supplied by ColumnScope; explicitly importing the
+          # newer internal implementation breaks Kotlin compilation.
           sed -i '/^import androidx\.compose\.foundation\.layout\.weight$/d' \
             app/src/main/java/me/magnum/melonds/ui/romlist/ui/RemixGuideUi.kt
           ! grep -R -E 'currentWindowAdaptiveInfoV2|^import androidx\.compose\.foundation\.layout\.weight$' \
             app/src/main/java
+          grep -F 'versionCode = 11011' app/build.gradle.kts
 
       - name: Apply Saltlord's Remix native-core delta
         run: git -C melonDS-android-lib apply ../Saltlords-Remix-Core-v1.1.0.patch
@@ -103,7 +123,7 @@ jobs:
       - name: Upload Saltlord's Remix APK
         uses: actions/upload-artifact@v4
         with:
-          name: Saltlords-Remix-1.1.0-Major-Build
+          name: Saltlords-Remix-1.1.1-First-Edition
           path: app/build/outputs/apk/gitHubProd/debug/*.apk
           if-no-files-found: error
           retention-days: 14
