@@ -1,0 +1,36 @@
+diff --git a/app/src/main/java/me/magnum/melonds/ui/emulator/RuntimeLayoutView.kt b/app/src/main/java/me/magnum/melonds/ui/emulator/RuntimeLayoutView.kt
+index b50b1bf7..39569c56 100644
+--- a/app/src/main/java/me/magnum/melonds/ui/emulator/RuntimeLayoutView.kt
++++ b/app/src/main/java/me/magnum/melonds/ui/emulator/RuntimeLayoutView.kt
+@@ -366,6 +366,7 @@ class RuntimeLayoutView(context: Context, attrs: AttributeSet? = null) : LayoutV
+             LayoutComponent.BUTTON_KH_HUD_TOGGLE,
+         )
+         val KH_HD_CINEMATIC_HIDDEN_COMPONENTS = setOf(
++            LayoutComponent.BUTTON_KH_X,
+             LayoutComponent.BUTTON_L,
+             LayoutComponent.BUTTON_R,
+             LayoutComponent.BUTTON_SELECT,
+diff --git a/app/src/main/java/me/magnum/melonds/ui/emulator/input/KhCameraSwipeInputHandler.kt b/app/src/main/java/me/magnum/melonds/ui/emulator/input/KhCameraSwipeInputHandler.kt
+index 2c0a2690..e2c150f6 100644
+--- a/app/src/main/java/me/magnum/melonds/ui/emulator/input/KhCameraSwipeInputHandler.kt
++++ b/app/src/main/java/me/magnum/melonds/ui/emulator/input/KhCameraSwipeInputHandler.kt
+@@ -2,6 +2,7 @@ package me.magnum.melonds.ui.emulator.input
+ 
+ import android.view.MotionEvent
+ import android.view.View
++import androidx.preference.PreferenceManager
+ import me.magnum.melonds.MelonEmulator
+ import me.magnum.melonds.ui.common.input.KhCameraSwipeZoneView
+ import kotlin.math.pow
+@@ -66,7 +67,10 @@ class KhCameraSwipeInputHandler(
+         }
+ 
+         view.setStickPosition(x, y)
+-        MelonEmulator.setKhCameraAxes(x * MAX_SPEED, y * MAX_SPEED)
++        val preferences = PreferenceManager.getDefaultSharedPreferences(view.context)
++        val cameraX = if (preferences.getString("kh_touch_camera_horizontal_direction", "normal") == "inverted") -x else x
++        val cameraY = if (preferences.getString("kh_touch_camera_vertical_direction", "normal") == "inverted") -y else y
++        MelonEmulator.setKhCameraAxes(cameraX * MAX_SPEED, cameraY * MAX_SPEED)
+     }
+ 
+     private fun travelRadius(view: View): Float =
