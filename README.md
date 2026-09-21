@@ -5,7 +5,7 @@
 </p>
 
 <p align="center">
-  A Kingdom Hearts-focused Android fork of Melon Mix, built for a modern way to play
+  An Android fork of a fork of Melon Mix, built for a modern way to play
   <i>Kingdom Hearts 358/2 Days</i> and <i>Kingdom Hearts Re:Coded</i>.
 </p>
 
