@@ -1,0 +1,74 @@
+diff --git a/app/src/main/java/me/magnum/melonds/domain/model/rom/config/HdCinematicOrientation.kt b/app/src/main/java/me/magnum/melonds/domain/model/rom/config/HdCinematicOrientation.kt
+new file mode 100644
+index 00000000..2b799c0a
+--- /dev/null
++++ b/app/src/main/java/me/magnum/melonds/domain/model/rom/config/HdCinematicOrientation.kt
+@@ -0,0 +1,4 @@
++package me.magnum.melonds.domain.model.rom.config
++
++/** Applied only while an HD replacement video is playing. */
++enum class HdCinematicOrientation { AUTOMATIC, LANDSCAPE, PORTRAIT }
+diff --git a/app/src/main/java/me/magnum/melonds/ui/common/input/KhActionButtonView.kt b/app/src/main/java/me/magnum/melonds/ui/common/input/KhActionButtonView.kt
+--- a/app/src/main/java/me/magnum/melonds/ui/common/input/KhActionButtonView.kt
++++ b/app/src/main/java/me/magnum/melonds/ui/common/input/KhActionButtonView.kt
+@@ -56,21 +56,49 @@
+     }
+ 
+     private fun drawAttack(canvas: Canvas, cx: Float, cy: Float, size: Float) {
++        // Geometric, open-handled action glyph. Its painted bounds occupy about 68%
++        // of the button's inside diameter, including the stroke at small sizes.
++        // All drawing uses the existing symbol paint so view alpha/tint remains intact.
++        canvas.save()
++        val scale = size * 0.0065f
++        canvas.translate(cx - 49f * scale, cy - 45f * scale)
++        canvas.scale(scale, scale)
+         symbolPaint.style = Paint.Style.STROKE
+-        symbolPaint.strokeWidth = size * 0.06f
+-        // Keyblade shaft and handle.
+-        canvas.drawLine(cx - size * 0.18f, cy + size * 0.18f, cx + size * 0.16f, cy - size * 0.20f, symbolPaint)
+-        canvas.drawLine(cx - size * 0.27f, cy + size * 0.08f, cx - size * 0.07f, cy + size * 0.26f, symbolPaint)
+-        canvas.drawCircle(cx - size * 0.20f, cy + size * 0.22f, size * 0.055f, symbolPaint)
+-        // The squared teeth make the silhouette read as a Keyblade, not a sword.
++        symbolPaint.strokeWidth = 5.5f
++        val handle = Path().apply {
++            moveTo(8f, 39f)
++            lineTo(26f, 18f)
++            lineTo(44f, 36f)
++            lineTo(27f, 55f)
++            close()
++            moveTo(26f, 18f)
++            lineTo(43f, 2f)
++            lineTo(60f, 19f)
++            lineTo(44f, 36f)
++            close()
++        }
++        canvas.drawPath(handle, symbolPaint)
++        val shaft = Path().apply {
++            moveTo(42f, 38f)
++            lineTo(74f, 68f)
++        }
++        symbolPaint.strokeWidth = 8f
++        canvas.drawPath(shaft, symbolPaint)
++        symbolPaint.style = Paint.Style.FILL
+         val teeth = Path().apply {
+-            moveTo(cx + size * 0.11f, cy - size * 0.20f)
+-            lineTo(cx + size * 0.27f, cy - size * 0.20f)
+-            lineTo(cx + size * 0.27f, cy - size * 0.10f)
+-            moveTo(cx + size * 0.20f, cy - size * 0.20f)
+-            lineTo(cx + size * 0.20f, cy - size * 0.29f)
++            moveTo(71f, 64f)
++            lineTo(90f, 80f)
++            lineTo(82f, 88f)
++            lineTo(78f, 84f)
++            lineTo(70f, 93f)
++            lineTo(66f, 89f)
++            lineTo(72f, 80f)
++            lineTo(65f, 84f)
++            lineTo(62f, 81f)
++            close()
+         }
+         canvas.drawPath(teeth, symbolPaint)
++        canvas.restore()
+     }
+ 
+     private fun drawJump(canvas: Canvas, cx: Float, cy: Float, size: Float) {
