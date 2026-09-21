@@ -46,16 +46,24 @@ index 39a40b58..e4eb4ed2 100644
 \ No newline at end of file
 +}
 diff --git a/app/src/main/java/me/magnum/melonds/impl/InternalLayoutsRepository.kt b/app/src/main/java/me/magnum/melonds/impl/InternalLayoutsRepository.kt
-index ae9126df..e68cf063 100644
+index 8133449d..e68cf063 100644
 --- a/app/src/main/java/me/magnum/melonds/impl/InternalLayoutsRepository.kt
 +++ b/app/src/main/java/me/magnum/melonds/impl/InternalLayoutsRepository.kt
-@@ -130,21 +130,29 @@ class InternalLayoutsRepository(private val context: Context, private val gson:
+@@ -36,6 +36,7 @@ class InternalLayoutsRepository(private val context: Context, private val gson:
+         private const val REMIX_LAYOUT_PREFERENCES = "saltlords_remix_layouts"
+         private const val KEY_COMPONENT_SCHEMA = "component_schema"
+         private const val COMPONENT_SCHEMA_HUD_TOGGLE = 1
++        private const val COMPONENT_SCHEMA_CINEMATIC_ROTATE = 2
+         private val layoutListType: Type = object : TypeToken<List<LayoutConfigurationDto>>(){}.type
+     }
+ 
+@@ -128,21 +129,31 @@ class InternalLayoutsRepository(private val context: Context, private val gson:
+                 val savedLayouts = loadLayouts()
                  val remixPreferences = context.getSharedPreferences(REMIX_LAYOUT_PREFERENCES, Context.MODE_PRIVATE)
                  val needsHudMigration = remixPreferences.getInt(KEY_COMPONENT_SCHEMA, 0) < COMPONENT_SCHEMA_HUD_TOGGLE
-                 val needsRotateMigration = remixPreferences.getInt(KEY_COMPONENT_SCHEMA, 0) < COMPONENT_SCHEMA_CINEMATIC_ROTATE
 -                val savedKhTouchRemix = savedLayouts.firstOrNull { it.id == LayoutConfiguration.KH_TOUCH_REMIX_ID }
 -                    ?.let { if (needsHudMigration) addHudToggleWithoutResettingLayout(it) else it }
--                    ?.let { if (needsRotateMigration) addCinematicRotateWithoutResettingLayout(it) else it }
++                val needsRotateMigration = remixPreferences.getInt(KEY_COMPONENT_SCHEMA, 0) < COMPONENT_SCHEMA_CINEMATIC_ROTATE
 +                // Migrate every saved custom layout, not only the starter preset. Users often
 +                // duplicate or rename that preset before editing it, and those layouts must gain
 +                // newly introduced Remix controls without losing any existing customization.
@@ -76,14 +84,50 @@ index ae9126df..e68cf063 100644
 +                    addAll(migratedSavedLayouts.filterNot { it.id == LayoutConfiguration.KH_TOUCH_REMIX_ID }.map { Deletable(it, false) })
                  }
                  areLayoutsLoaded = true
-                 if (needsHudMigration || needsRotateMigration) {
+-                if (needsHudMigration) {
++                if (needsHudMigration || needsRotateMigration) {
                      // Persist only the newly introduced control. Every existing coordinate,
                      // size, alpha and visibility choice remains untouched.
 -                    if (savedKhTouchRemix != null) saveLayouts()
+-                    remixPreferences.edit().putInt(KEY_COMPONENT_SCHEMA, COMPONENT_SCHEMA_HUD_TOGGLE).apply()
 +                    if (migratedSavedLayouts != savedLayouts) saveLayouts()
-                     remixPreferences.edit().putInt(KEY_COMPONENT_SCHEMA, COMPONENT_SCHEMA_CINEMATIC_ROTATE).apply()
++                    remixPreferences.edit().putInt(KEY_COMPONENT_SCHEMA, COMPONENT_SCHEMA_CINEMATIC_ROTATE).apply()
                  }
              }
+         }
+@@ -242,4 +253,32 @@ class InternalLayoutsRepository(private val context: Context, private val gson:
+         )
+     }
+ 
++    private fun addCinematicRotateWithoutResettingLayout(layout: LayoutConfiguration): LayoutConfiguration {
++        return layout.copy(
++            layoutVariants = layout.layoutVariants.mapValues { (variant, uiLayout) ->
++                val components = uiLayout.mainScreenLayout.components ?: return@mapValues uiLayout
++                if (components.any { it.component == LayoutComponent.BUTTON_KH_CINEMATIC_ROTATE }) return@mapValues uiLayout
++
++                val safeWidth = variant.uiSize.x - variant.uiInsets.left - variant.uiInsets.right
++                val safeHeight = variant.uiSize.y - variant.uiInsets.top - variant.uiInsets.bottom
++                val portrait = variant.uiSize.y > variant.uiSize.x
++                val rect = Rect(
++                    variant.uiInsets.left + (safeWidth * if (portrait) 0.88f else 0.90f).roundToInt(),
++                    variant.uiInsets.top + (safeHeight * if (portrait) 0.05f else 0.08f).roundToInt(),
++                    (safeWidth * if (portrait) 0.09f else 0.07f).roundToInt(),
++                    (safeHeight * if (portrait) 0.06f else 0.10f).roundToInt(),
++                )
++                uiLayout.copy(
++                    mainScreenLayout = uiLayout.mainScreenLayout.copy(
++                        components = components + PositionedLayoutComponent(
++                            rect = rect,
++                            component = LayoutComponent.BUTTON_KH_CINEMATIC_ROTATE,
++                            alpha = 0.85f,
++                        )
++                    )
++                )
++            }
++        )
++    }
++
+ }
 diff --git a/app/src/main/java/me/magnum/melonds/impl/KhCheatDatabaseSeeder.kt b/app/src/main/java/me/magnum/melonds/impl/KhCheatDatabaseSeeder.kt
 new file mode 100644
 index 00000000..735f63d2
@@ -177,18 +221,56 @@ index 979dd825..9b77af27 100644
 \ No newline at end of file
 +}
 diff --git a/app/src/main/java/me/magnum/melonds/ui/emulator/RuntimeLayoutView.kt b/app/src/main/java/me/magnum/melonds/ui/emulator/RuntimeLayoutView.kt
-index 9e19e6b4..529eca8f 100644
+index cb44180b..529eca8f 100644
 --- a/app/src/main/java/me/magnum/melonds/ui/emulator/RuntimeLayoutView.kt
 +++ b/app/src/main/java/me/magnum/melonds/ui/emulator/RuntimeLayoutView.kt
-@@ -324,8 +324,6 @@ class RuntimeLayoutView(context: Context, attrs: AttributeSet? = null) : LayoutV
-         hiddenComponents = (hiddenComponents + khSceneHiddenComponents(khTouchControlSceneMode)).distinct()
-         if (!isKhCinematicPlaying) {
-             hiddenComponents = (hiddenComponents + LayoutComponent.BUTTON_KH_CINEMATIC_ROTATE).distinct()
--        } else {
--            hiddenComponents = hiddenComponents - LayoutComponent.BUTTON_KH_CINEMATIC_ROTATE
+@@ -46,6 +46,8 @@ class RuntimeLayoutView(context: Context, attrs: AttributeSet? = null) : LayoutV
+     private var areScreensSwapped = false
+     private var connectedControllersState: ConnectedControllersState = ConnectedControllersState.NoControllers
+     private var khTouchControlSceneMode = 0
++    private var isKhCinematicPlaying = false
++    private var khCinematicRotateAction: (() -> Unit)? = null
+     private val autoHideHandler = Handler(Looper.getMainLooper())
+     private val autoHideRunnable = Runnable { fadeSoftInputs() }
+ 
+@@ -85,6 +87,19 @@ class RuntimeLayoutView(context: Context, attrs: AttributeSet? = null) : LayoutV
+         animateKhSceneControls(previouslyHidden - nowHidden, false)
+     }
+ 
++    fun setKhCinematicRotateControl(isPlaying: Boolean, onRotate: () -> Unit) {
++        isKhCinematicPlaying = isPlaying
++        khCinematicRotateAction = onRotate
++        bindKhCinematicRotateControl()
++        updateVisibility()
++    }
++
++    private fun bindKhCinematicRotateControl() {
++        getLayoutComponentView(LayoutComponent.BUTTON_KH_CINEMATIC_ROTATE)?.view?.setOnClickListener {
++            khCinematicRotateAction?.invoke()
++        }
++    }
++
+     fun toggleSoftInputVisibility() {
+         isSoftInputVisible = !isSoftInputVisible
+         setLayoutComponentToggleState(LayoutComponent.BUTTON_TOGGLE_SOFT_INPUT, isSoftInputVisible)
+@@ -116,6 +131,7 @@ class RuntimeLayoutView(context: Context, attrs: AttributeSet? = null) : LayoutV
+         currentRuntimeLayout = runtimeLayout
+         instantiateLayout(runtimeLayout.layout, layoutTarget)
+         placeTouchZonesBehindControls(layoutTarget)
++        bindKhCinematicRotateControl()
+         updateInputs()
+         updateVisibility()
+         setLayoutComponentToggleState(LayoutComponent.BUTTON_TOGGLE_SOFT_INPUT, isSoftInputVisible)
+@@ -306,6 +322,9 @@ class RuntimeLayoutView(context: Context, attrs: AttributeSet? = null) : LayoutV
          }
+ 
+         hiddenComponents = (hiddenComponents + khSceneHiddenComponents(khTouchControlSceneMode)).distinct()
++        if (!isKhCinematicPlaying) {
++            hiddenComponents = (hiddenComponents + LayoutComponent.BUTTON_KH_CINEMATIC_ROTATE).distinct()
++        }
          return hiddenComponents.toSet()
      }
+ 
 diff --git a/app/src/main/java/me/magnum/melonds/ui/romdetails/RomDetailsActivity.kt b/app/src/main/java/me/magnum/melonds/ui/romdetails/RomDetailsActivity.kt
 index 908850e3..bbe4d8e2 100644
 --- a/app/src/main/java/me/magnum/melonds/ui/romdetails/RomDetailsActivity.kt
@@ -494,7 +576,7 @@ index d42ddb82..a5131103 100644
 \ No newline at end of file
 +}
 diff --git a/app/src/main/java/me/magnum/melonds/ui/romlist/RomListActivity.kt b/app/src/main/java/me/magnum/melonds/ui/romlist/RomListActivity.kt
-index cd612449..cd960ec0 100644
+index 69689763..cd960ec0 100644
 --- a/app/src/main/java/me/magnum/melonds/ui/romlist/RomListActivity.kt
 +++ b/app/src/main/java/me/magnum/melonds/ui/romlist/RomListActivity.kt
 @@ -41,6 +41,7 @@ import me.magnum.melonds.domain.model.RomScanningStatus
@@ -513,7 +595,15 @@ index cd612449..cd960ec0 100644
  
      private var khAssetsPrompt by mutableStateOf<KhAssetsPrompt?>(null)
      private var isMigratingKhAssets by mutableStateOf(false)
-@@ -93,6 +95,11 @@ class RomListActivity : AppCompatActivity() {
+@@ -77,6 +79,7 @@ class RomListActivity : AppCompatActivity() {
+     private var isFoldableInnerDisplay = false
+     private var showRemixGuide by mutableStateOf(false)
+     private var remixGuideIsFirstLaunch = false
++    private var remixGuideIsWhatsNew = false
+ 
+     // The all-files-access settings screen reports nothing back; re-check on return.
+     private val allFilesAccessLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+@@ -92,9 +95,15 @@ class RomListActivity : AppCompatActivity() {
          enableEdgeToEdge(statusBarStyle = SystemBarStyle.dark(Color.TRANSPARENT))
          super.onCreate(savedInstanceState)
  
@@ -524,12 +614,54 @@ index cd612449..cd960ec0 100644
 +
          if (savedInstanceState == null) {
              remixGuideIsFirstLaunch = shouldShowRemixGuideOnLaunch()
-             remixGuideIsWhatsNew = !remixGuideIsFirstLaunch && shouldShowRemixWhatsNewOnLaunch()
-@@ -420,6 +427,6 @@ class RomListActivity : AppCompatActivity() {
+-            showRemixGuide = remixGuideIsFirstLaunch
++            remixGuideIsWhatsNew = !remixGuideIsFirstLaunch && shouldShowRemixWhatsNewOnLaunch()
++            showRemixGuide = remixGuideIsFirstLaunch || remixGuideIsWhatsNew
+         }
+ 
+         lifecycleScope.launch {
+@@ -197,6 +206,7 @@ class RomListActivity : AppCompatActivity() {
+                     },
+                     onOpenRemixGuide = {
+                         remixGuideIsFirstLaunch = false
++                        remixGuideIsWhatsNew = false
+                         showRemixGuide = true
+                     },
+                     retrieveRomIcon = { rom ->
+@@ -323,13 +333,16 @@ class RomListActivity : AppCompatActivity() {
+                 if (showRemixGuide) {
+                     RemixGuideUi(
+                         firstLaunch = remixGuideIsFirstLaunch,
++                        whatsNew = remixGuideIsWhatsNew,
+                         onDismiss = {
+                             getSharedPreferences(REMIX_PREFERENCES, MODE_PRIVATE)
+                                 .edit()
+                                 .putBoolean(KEY_REMIX_GUIDE_COMPLETED, true)
++                                .putString(KEY_REMIX_WHATS_NEW_SHOWN, REMIX_WHATS_NEW_REVISION)
+                                 .apply()
+                             showRemixGuide = false
+                             remixGuideIsFirstLaunch = false
++                            remixGuideIsWhatsNew = false
+                         },
+                     )
+                 }
+@@ -353,6 +366,11 @@ class RomListActivity : AppCompatActivity() {
+         return isFreshInstallation
+     }
+ 
++    private fun shouldShowRemixWhatsNewOnLaunch(): Boolean {
++        return getSharedPreferences(REMIX_PREFERENCES, MODE_PRIVATE)
++            .getString(KEY_REMIX_WHATS_NEW_SHOWN, null) != REMIX_WHATS_NEW_REVISION
++    }
++
+     // [KHMM]
+     private fun dismissKhAssetsPrompt() {
+         khAssetsFolderManager.setSetupPromptHandled()
+@@ -408,5 +426,7 @@ class RomListActivity : AppCompatActivity() {
+     private companion object {
          const val REMIX_PREFERENCES = "saltlords_remix"
          const val KEY_REMIX_GUIDE_COMPLETED = "guide_completed"
-         const val KEY_REMIX_WHATS_NEW_SHOWN = "whats_new_shown"
--        const val REMIX_WHATS_NEW_REVISION = "1.1.1-cinematic-polish"
++        const val KEY_REMIX_WHATS_NEW_SHOWN = "whats_new_shown"
 +        const val REMIX_WHATS_NEW_REVISION = "1.1.1-first-edition"
      }
  }
@@ -563,19 +695,41 @@ index ccd7ff9d..35ad97d4 100644
 \ No newline at end of file
 +}
 diff --git a/app/src/main/java/me/magnum/melonds/ui/romlist/ui/RemixGuideUi.kt b/app/src/main/java/me/magnum/melonds/ui/romlist/ui/RemixGuideUi.kt
-index 50c11657..8af3016c 100644
+index 8f329f36..8af3016c 100644
 --- a/app/src/main/java/me/magnum/melonds/ui/romlist/ui/RemixGuideUi.kt
 +++ b/app/src/main/java/me/magnum/melonds/ui/romlist/ui/RemixGuideUi.kt
-@@ -50,6 +50,8 @@ fun RemixGuideUi(firstLaunch: Boolean, whatsNew: Boolean = false, onDismiss: ()
-                             "Choose regular or reverse landscape for HD cinematics",
-                             "Place and resize the cinematic Rotate control in the layout editor",
-                             "A refreshed launcher-icon identity that prompts Android launchers to reload the Remix artwork",
+@@ -28,7 +28,7 @@ import androidx.compose.ui.window.DialogProperties
+ import me.magnum.melonds.BuildConfig
+ 
+ @Composable
+-fun RemixGuideUi(firstLaunch: Boolean, onDismiss: () -> Unit) {
++fun RemixGuideUi(firstLaunch: Boolean, whatsNew: Boolean = false, onDismiss: () -> Unit) {
+     Dialog(
+         onDismissRequest = { if (!firstLaunch) onDismiss() },
+         properties = DialogProperties(usePlatformDefaultWidth = false),
+@@ -40,7 +40,20 @@ fun RemixGuideUi(firstLaunch: Boolean, onDismiss: () -> Unit) {
+                         .padding(horizontal = 24.dp, vertical = 28.dp),
+                     verticalArrangement = Arrangement.spacedBy(16.dp),
+                 ) {
+-                    Text("Melon Mix: Saltlord’s Remix", style = MaterialTheme.typography.h5, fontWeight = FontWeight.Bold)
++                    Text(
++                        if (whatsNew) "What’s new in Saltlord’s Remix" else "Melon Mix: Saltlord’s Remix",
++                        style = MaterialTheme.typography.h5,
++                        fontWeight = FontWeight.Bold,
++                    )
++                    if (whatsNew) {
++                        GuideSection("Cinematic & launcher polish", listOf(
++                            "Choose regular or reverse landscape for HD cinematics",
++                            "Place and resize the cinematic Rotate control in the layout editor",
++                            "A refreshed launcher-icon identity that prompts Android launchers to reload the Remix artwork",
 +                            "Preloaded per-game cheats for all six regional releases of 358/2 Days and Re:coded",
 +                            "The upstream MelonMix updater is disabled until Remix has its own safe release feed",
-                         ))
-                     }
++                        ))
++                    }
                      Text(
-@@ -66,6 +68,7 @@ fun RemixGuideUi(firstLaunch: Boolean, whatsNew: Boolean = false, onDismiss: ()
+                         "A human-directed, Android-focused fork built to make the Kingdom Hearts Nintendo DS games feel at home on modern touch devices.",
+                         style = MaterialTheme.typography.body1,
+@@ -55,6 +68,7 @@ fun RemixGuideUi(firstLaunch: Boolean, onDismiss: () -> Unit) {
                          "Portrait 4:3, landscape 4:3 and fullscreen landscape launch profiles",
                          "Foldable-aware layouts and custom viewport positioning",
                          "HD cinematics with optional landscape preference, manual rotation and gameplay-orientation restoration",
@@ -583,7 +737,7 @@ index 50c11657..8af3016c 100644
                          "Saltlord’s Remix launcher icon and red, black and warm-gold visual identity",
                      ))
                      GuideSection("Display profiles", listOf(
-@@ -81,6 +84,7 @@ fun RemixGuideUi(firstLaunch: Boolean, whatsNew: Boolean = false, onDismiss: ()
+@@ -70,6 +84,7 @@ fun RemixGuideUi(firstLaunch: Boolean, onDismiss: () -> Unit) {
                      ))
                      GuideSection("Credits & development", listOf(
                          "Built upon KH Melon Mix, MelonMix Android, melonDS Android and melonDS.",
@@ -3793,10 +3947,19 @@ index 00000000..d64d4712
 +</codelist>
 \ No newline at end of file
 diff --git a/app/src/main/res/values/strings.xml b/app/src/main/res/values/strings.xml
-index 31cd6741..cd9cca84 100644
+index 8ef72473..cd9cca84 100644
 --- a/app/src/main/res/values/strings.xml
 +++ b/app/src/main/res/values/strings.xml
-@@ -356,6 +356,10 @@
+@@ -248,6 +248,8 @@
+     <string name="kh_prefer_landscape_cinematics">Prefer landscape HD cinematics</string>
+     <string name="kh_prefer_landscape_cinematics_summary">Temporarily rotate HD cinematics to landscape, then restore the exact gameplay orientation when playback ends. The Rotate button can still change an individual cinematic.</string>
+     <string name="kh_rotate_cinematic">Rotate cinematic</string>
++    <string name="kh_cinematic_landscape_direction">Cinematic landscape direction</string>
++    <string name="input_kh_cinematic_rotate">Cinematic Rotate</string>
+     <string name="kh_bgm_category">Remastered music (KH Melon Mix)</string>
+     <string name="kh_bgm_pack_days">358/2 Days music pack</string>
+     <string name="kh_bgm_pack_recoded">Re:coded music pack</string>
+@@ -354,6 +356,10 @@
      <string name="cheats_database">Cheats database (XML format)</string>
      <string name="import_cheats">Import cheats</string>
      <string name="import_cheats_summary">Import cheats from database files to make them available. XML and usrcheat.dat databases are supported. Any previously imported cheat will be deleted.</string>
