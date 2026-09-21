@@ -1,0 +1,372 @@
+diff --git a/app/src/main/java/me/magnum/melonds/ui/romlist/RomListActivity.kt b/app/src/main/java/me/magnum/melonds/ui/romlist/RomListActivity.kt
+index 69689763..248b274c 100644
+--- a/app/src/main/java/me/magnum/melonds/ui/romlist/RomListActivity.kt
++++ b/app/src/main/java/me/magnum/melonds/ui/romlist/RomListActivity.kt
+@@ -35,22 +35,26 @@ import kotlinx.coroutines.flow.collectLatest
+ import kotlinx.coroutines.launch
+ import me.magnum.melonds.R
+ import me.magnum.melonds.common.KhAssetsFolderManager
++import me.magnum.melonds.common.romprocessors.RomFileProcessorFactory
+ import me.magnum.melonds.domain.model.ConsoleType
+ import me.magnum.melonds.domain.model.DownloadProgress
+ import me.magnum.melonds.domain.model.RomScanningStatus
+ import me.magnum.melonds.domain.model.appupdate.AppUpdate
+ import me.magnum.melonds.domain.model.rom.Rom
+ import me.magnum.melonds.domain.model.rom.config.LaunchDisplayProfile
++import me.magnum.melonds.impl.KhCheatDatabaseSeeder
+ import me.magnum.melonds.parcelables.RomParcelable
+ import me.magnum.melonds.ui.common.melonTextButtonColors
+ import me.magnum.melonds.ui.common.rom.EmulatorLaunchValidatorDelegate
+ import me.magnum.melonds.ui.emulator.EmulatorActivity
++import me.magnum.melonds.ui.emulator.KhMenuSoundPlayer
+ import me.magnum.melonds.ui.romdetails.RomDetailsActivity
+ import me.magnum.melonds.ui.romlist.ui.DownloadProgressDialog
+ import me.magnum.melonds.ui.romlist.ui.NightlyUpdateDialog
+ import me.magnum.melonds.ui.romlist.ui.ProdUpdateAvailableDialog
+ import me.magnum.melonds.ui.romlist.ui.RomListScreen
+ import me.magnum.melonds.ui.romlist.ui.RemixGuideUi
++import me.magnum.melonds.ui.romlist.ui.RemixSetupUi
+ import me.magnum.melonds.ui.settings.SettingsActivity
+ import me.magnum.melonds.ui.theme.MelonTheme
+ import javax.inject.Inject
+@@ -70,6 +74,8 @@ class RomListActivity : AppCompatActivity() {
+     private val updatesViewModel: UpdatesViewModel by viewModels()
+ 
+     @Inject lateinit var khAssetsFolderManager: KhAssetsFolderManager
++    @Inject lateinit var khCheatDatabaseSeeder: KhCheatDatabaseSeeder
++    @Inject lateinit var romFileProcessorFactory: RomFileProcessorFactory
+ 
+     private var khAssetsPrompt by mutableStateOf<KhAssetsPrompt?>(null)
+     private var isMigratingKhAssets by mutableStateOf(false)
+@@ -77,6 +83,20 @@ class RomListActivity : AppCompatActivity() {
+     private var isFoldableInnerDisplay = false
+     private var showRemixGuide by mutableStateOf(false)
+     private var remixGuideIsFirstLaunch = false
++    private var remixGuideIsWhatsNew = false
++    private var remixSetupStep by mutableStateOf<Int?>(null)
++    private var frontendMenuSounds: KhMenuSoundPlayer? = null
++
++    private val setupRomFolderPicker = registerForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
++        if (uri != null) viewModel.addRomSearchDirectory(uri)
++    }
++    private val setupModFolderPicker = registerForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
++        if (uri != null) {
++            val path = khAssetsFolderManager.treeUriToPath(uri)
++            if (path == null) Toast.makeText(this, R.string.kh_assets_invalid_folder, Toast.LENGTH_LONG).show()
++            else khAssetsFolderManager.setCustomMelonMixRoot(path)
++        }
++    }
+ 
+     // The all-files-access settings screen reports nothing back; re-check on return.
+     private val allFilesAccessLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+@@ -92,9 +112,15 @@ class RomListActivity : AppCompatActivity() {
+         enableEdgeToEdge(statusBarStyle = SystemBarStyle.dark(Color.TRANSPARENT))
+         super.onCreate(savedInstanceState)
+ 
++        lifecycleScope.launch {
++            runCatching { khCheatDatabaseSeeder.seedIfNeeded() }
++                .onFailure { it.printStackTrace() }
++        }
++
+         if (savedInstanceState == null) {
+             remixGuideIsFirstLaunch = shouldShowRemixGuideOnLaunch()
+-            showRemixGuide = remixGuideIsFirstLaunch
++            remixGuideIsWhatsNew = !remixGuideIsFirstLaunch && shouldShowRemixWhatsNewOnLaunch()
++            showRemixGuide = remixGuideIsFirstLaunch || remixGuideIsWhatsNew
+         }
+ 
+         lifecycleScope.launch {
+@@ -106,7 +132,7 @@ class RomListActivity : AppCompatActivity() {
+         }
+ 
+         // [KHMM]
+-        if (savedInstanceState == null && !khAssetsFolderManager.isSetupPromptHandled()) {
++        if (savedInstanceState == null && !remixGuideIsFirstLaunch && !khAssetsFolderManager.isSetupPromptHandled()) {
+             khAssetsPrompt = when {
+                 khAssetsFolderManager.needsMigration() -> KhAssetsPrompt.Migrate
+                 !khAssetsFolderManager.hasStorageAccess() -> KhAssetsPrompt.Fresh
+@@ -116,6 +142,14 @@ class RomListActivity : AppCompatActivity() {
+ 
+         val emulatorLauncherValidatorDelegate = EmulatorLaunchValidatorDelegate(this, object : EmulatorLaunchValidatorDelegate.Callback {
+             override fun onRomValidated(rom: Rom) {
++                val gameCode = romFileProcessorFactory.getFileRomProcessorForDocument(rom.uri)
++                    ?.getRomInfo(rom)?.gameCode
++                if (gameCode !in setOf("YKGP", "YKGJ", "YKGE", "BK9P", "BK9J", "BK9E")) {
++                    Toast.makeText(this@RomListActivity,
++                        "This game isn't supported by Saltlord’s Remix. Play 358/2 Days or Re:Coded instead.",
++                        Toast.LENGTH_LONG).show()
++                    return
++                }
+                 val intent = EmulatorActivity.getRomEmulatorActivityIntent(this@RomListActivity, rom)
+                 startActivity(intent)
+             }
+@@ -192,11 +226,24 @@ class RomListActivity : AppCompatActivity() {
+                     onRefresh = viewModel::refreshRoms,
+                     onDirectorySelected = viewModel::addRomSearchDirectory,
+                     onNavigateToSettings = {
++                        playFrontendMenuSound()
+                         val intent = Intent(this@RomListActivity, SettingsActivity::class.java)
+                         startActivity(intent)
+                     },
+                     onOpenRemixGuide = {
++                        playFrontendMenuSound()
+                         remixGuideIsFirstLaunch = false
++                        remixGuideIsWhatsNew = false
++                        showRemixGuide = true
++                    },
++                    onOpenRemixSetup = {
++                        playFrontendMenuSound()
++                        remixSetupStep = 0
++                    },
++                    onOpenRemixWhatsNew = {
++                        playFrontendMenuSound()
++                        remixGuideIsFirstLaunch = false
++                        remixGuideIsWhatsNew = true
+                         showRemixGuide = true
+                     },
+                     retrieveRomIcon = { rom ->
+@@ -323,20 +370,98 @@ class RomListActivity : AppCompatActivity() {
+                 if (showRemixGuide) {
+                     RemixGuideUi(
+                         firstLaunch = remixGuideIsFirstLaunch,
++                        whatsNew = remixGuideIsWhatsNew,
+                         onDismiss = {
+-                            getSharedPreferences(REMIX_PREFERENCES, MODE_PRIVATE)
+-                                .edit()
+-                                .putBoolean(KEY_REMIX_GUIDE_COMPLETED, true)
+-                                .apply()
+-                            showRemixGuide = false
+-                            remixGuideIsFirstLaunch = false
++                            closeRemixGuide()
+                         },
++                        onStartSetup = {
++                            playFrontendMenuSound()
++                            closeRemixGuide()
++                            remixSetupStep = 0
++                        },
++                    )
++                }
++                remixSetupStep?.let { step ->
++                    RemixSetupUi(
++                        step = step,
++                        onNext = { playFrontendMenuSound(); remixSetupStep = (step + 1).takeIf { it < 8 } },
++                        onSkip = { playFrontendMenuSound(); remixSetupStep = null },
++                        onRequestFileAccess = ::requestStorageAccess,
++                        onChooseRomFolder = { setupRomFolderPicker.launch(null) },
++                        onChooseModFolder = { setupModFolderPicker.launch(null) },
++                        onChooseDisplay = ::chooseInitialDisplayProfile,
++                        onChooseGraphics = ::chooseGraphicsPreset,
++                        onChooseMenuSounds = ::chooseFrontendMenuSounds,
+                     )
+                 }
+             }
+         }
+     }
+ 
++    private fun closeRemixGuide() {
++        getSharedPreferences(REMIX_PREFERENCES, MODE_PRIVATE).edit()
++            .putBoolean(KEY_REMIX_GUIDE_COMPLETED, true)
++            .putString(KEY_REMIX_WHATS_NEW_SHOWN, REMIX_WHATS_NEW_REVISION)
++            .apply()
++        showRemixGuide = false
++        remixGuideIsFirstLaunch = false
++        remixGuideIsWhatsNew = false
++        khAssetsFolderManager.setSetupPromptHandled()
++    }
++
++    private fun playFrontendMenuSound() {
++        if (androidx.preference.PreferenceManager.getDefaultSharedPreferences(this)
++                .getBoolean("kh_frontend_menu_sounds", true)) {
++            val player = frontendMenuSounds ?: KhMenuSoundPlayer(this).also { frontendMenuSounds = it }
++            player.play(KhMenuSoundPlayer.SOUND_ENTER)
++        }
++    }
++
++    override fun onDestroy() {
++        frontendMenuSounds?.release()
++        super.onDestroy()
++    }
++
++    private fun chooseInitialDisplayProfile() {
++        val labels = arrayOf("Automatic", "Portrait · 4:3", "Landscape · 4:3", "Landscape · Fullscreen")
++        val profiles = arrayOf("AUTOMATIC", "PORTRAIT_4_3", "LANDSCAPE_4_3", "LANDSCAPE_WIDESCREEN")
++        androidx.appcompat.app.AlertDialog.Builder(this)
++            .setTitle("Initial display profile")
++            .setItems(labels) { _, selected ->
++                androidx.preference.PreferenceManager.getDefaultSharedPreferences(this)
++                    .edit().putString("kh_initial_display_profile", profiles[selected]).apply()
++            }.show()
++    }
++
++    private fun chooseFrontendMenuSounds() {
++        val prefs = androidx.preference.PreferenceManager.getDefaultSharedPreferences(this)
++        val labels = arrayOf("On", "Off")
++        androidx.appcompat.app.AlertDialog.Builder(this)
++            .setTitle("Kingdom Hearts menu sounds")
++            .setSingleChoiceItems(labels, if (prefs.getBoolean("kh_frontend_menu_sounds", true)) 0 else 1) { dialog, selected ->
++                prefs.edit().putBoolean("kh_frontend_menu_sounds", selected == 0).apply()
++                dialog.dismiss()
++            }.show()
++    }
++
++    private fun chooseGraphicsPreset() {
++        val labels = arrayOf("Low-Spec · 1x", "Balanced · 2x", "High-Spec · 4x", "Custom · keep current settings")
++        androidx.appcompat.app.AlertDialog.Builder(this)
++            .setTitle("Graphics preset")
++            .setItems(labels) { _, selected ->
++                if (selected == 3) return@setItems
++                androidx.preference.PreferenceManager.getDefaultSharedPreferences(this).edit()
++                    .putString("video_internal_resolution", listOf("1", "2", "4")[selected])
++                    .putBoolean("enable_enhanced_graphics", true)
++                    .putBoolean("kh_single_screen_mode", true)
++                    .putInt("kh_portrait_screen_position", 15)
++                    .putBoolean("kh_show_subtitles", true)
++                    .putString("video_filtering", if (selected == 0) "none" else "linear")
++                    .putString("fps_counter_position", "hidden")
++                    .apply()
++            }.show()
++    }
++
+     private fun shouldShowRemixGuideOnLaunch(): Boolean {
+         val preferences = getSharedPreferences(REMIX_PREFERENCES, MODE_PRIVATE)
+         if (preferences.contains(KEY_REMIX_GUIDE_COMPLETED)) {
+@@ -353,6 +478,11 @@ class RomListActivity : AppCompatActivity() {
+         return isFreshInstallation
+     }
+ 
++    private fun shouldShowRemixWhatsNewOnLaunch(): Boolean {
++        return getSharedPreferences(REMIX_PREFERENCES, MODE_PRIVATE)
++            .getString(KEY_REMIX_WHATS_NEW_SHOWN, null) != REMIX_WHATS_NEW_REVISION
++    }
++
+     // [KHMM]
+     private fun dismissKhAssetsPrompt() {
+         khAssetsFolderManager.setSetupPromptHandled()
+@@ -408,5 +538,7 @@ class RomListActivity : AppCompatActivity() {
+     private companion object {
+         const val REMIX_PREFERENCES = "saltlords_remix"
+         const val KEY_REMIX_GUIDE_COMPLETED = "guide_completed"
++        const val KEY_REMIX_WHATS_NEW_SHOWN = "whats_new_shown"
++        const val REMIX_WHATS_NEW_REVISION = "1.1.1-first-edition"
+     }
+ }
+diff --git a/app/src/main/java/me/magnum/melonds/ui/romlist/ui/RemixGuideUi.kt b/app/src/main/java/me/magnum/melonds/ui/romlist/ui/RemixGuideUi.kt
+index 8f329f36..432f4c2f 100644
+--- a/app/src/main/java/me/magnum/melonds/ui/romlist/ui/RemixGuideUi.kt
++++ b/app/src/main/java/me/magnum/melonds/ui/romlist/ui/RemixGuideUi.kt
+@@ -1,5 +1,6 @@
+ package me.magnum.melonds.ui.romlist.ui
+ 
++import androidx.compose.foundation.Image
+ import androidx.compose.foundation.layout.Arrangement
+ import androidx.compose.foundation.layout.Column
+ import androidx.compose.foundation.layout.Row
+@@ -20,15 +21,18 @@ import androidx.compose.material.Text
+ import androidx.compose.material.TextButton
+ import androidx.compose.runtime.Composable
+ import androidx.compose.ui.Modifier
++import androidx.compose.ui.layout.ContentScale
++import androidx.compose.ui.res.painterResource
+ import androidx.compose.ui.text.font.FontWeight
+ import androidx.compose.ui.unit.dp
+ import androidx.compose.ui.unit.sp
+ import androidx.compose.ui.window.Dialog
+ import androidx.compose.ui.window.DialogProperties
+ import me.magnum.melonds.BuildConfig
++import me.magnum.melonds.R
+ 
+ @Composable
+-fun RemixGuideUi(firstLaunch: Boolean, onDismiss: () -> Unit) {
++fun RemixGuideUi(firstLaunch: Boolean, whatsNew: Boolean = false, onDismiss: () -> Unit, onStartSetup: () -> Unit = onDismiss) {
+     Dialog(
+         onDismissRequest = { if (!firstLaunch) onDismiss() },
+         properties = DialogProperties(usePlatformDefaultWidth = false),
+@@ -40,11 +44,38 @@ fun RemixGuideUi(firstLaunch: Boolean, onDismiss: () -> Unit) {
+                         .padding(horizontal = 24.dp, vertical = 28.dp),
+                     verticalArrangement = Arrangement.spacedBy(16.dp),
+                 ) {
+-                    Text("Melon Mix: Saltlord’s Remix", style = MaterialTheme.typography.h5, fontWeight = FontWeight.Bold)
++                    if (!whatsNew) {
++                        Image(
++                            painter = painterResource(R.drawable.kh_remix_final_logo),
++                            contentDescription = "Saltlord’s Remix logo",
++                            contentScale = ContentScale.Fit,
++                            modifier = Modifier.fillMaxWidth().height(130.dp),
++                        )
++                    }
++                    Text(
++                        if (whatsNew) "What’s new in Saltlord’s Remix" else "Melon Mix: Saltlord’s Remix",
++                        style = MaterialTheme.typography.h5,
++                        fontWeight = FontWeight.Bold,
++                    )
++                    if (whatsNew) {
++                        GuideSection("Cinematic & launcher polish", listOf(
++                            "HD cinematics follow the device in either landscape direction",
++                            "Choose Automatic, Landscape or Portrait independently for each game when HD video assets are present",
++                            "A refreshed launcher-icon identity that prompts Android launchers to reload the Remix artwork",
++                            "Preloaded per-game cheats for all six regional releases of 358/2 Days and Re:coded",
++                            "The upstream MelonMix updater is disabled until Remix has its own safe release feed",
++                        ))
++                    }
+                     Text(
+                         "A human-directed, Android-focused fork built to make the Kingdom Hearts Nintendo DS games feel at home on modern touch devices.",
+                         style = MaterialTheme.typography.body1,
+                     )
++                    if (firstLaunch) {
++                        GuideSection("Built for the Kingdom Hearts DS games", listOf(
++                            "Play Kingdom Hearts 358/2 Days and Kingdom Hearts Re:Coded.",
++                            "US versions work best with KH Melon Mix enhancements. EU and JP versions may have limited enhancements or visual glitches.",
++                        ))
++                    }
+                     GuideSection("What’s different in Remix?", listOf(
+                         "A dedicated, editable KH touchscreen preset",
+                         "Relative movement and camera controls designed for touch",
+@@ -54,7 +85,8 @@ fun RemixGuideUi(firstLaunch: Boolean, onDismiss: () -> Unit) {
+                         "Per-control positioning, sizing and opacity with grid snapping",
+                         "Portrait 4:3, landscape 4:3 and fullscreen landscape launch profiles",
+                         "Foldable-aware layouts and custom viewport positioning",
+-                        "HD cinematics with optional landscape preference, manual rotation and gameplay-orientation restoration",
++                        "Per-game HD cinematic orientation with gameplay-orientation restoration",
++                        "A preloaded, individually toggleable Kingdom Hearts cheat collection",
+                         "Saltlord’s Remix launcher icon and red, black and warm-gold visual identity",
+                     ))
+                     GuideSection("Display profiles", listOf(
+@@ -70,6 +102,8 @@ fun RemixGuideUi(firstLaunch: Boolean, onDismiss: () -> Unit) {
+                     ))
+                     GuideSection("Credits & development", listOf(
+                         "Built upon KH Melon Mix, MelonMix Android, melonDS Android and melonDS.",
++                        "Bundled Kingdom Hearts cheat codes are a curated subset of DeadSkullzJr’s NDS(i) Cheat Database (2025-08-12 release); Saltlord’s Remix packages the relevant entries for convenience and does not claim authorship of them.",
++                        "Kingdom Hearts pattern wallpapers used in the game backgrounds: toowiggly (Reddit, r/KingdomHearts).",
+                         "AI assistance has supported research, implementation and debugging under human direction. Upstream attribution remains essential, and useful bug reports are welcome.",
+                     ))
+                     Divider()
+@@ -84,10 +118,11 @@ fun RemixGuideUi(firstLaunch: Boolean, onDismiss: () -> Unit) {
+                     horizontalArrangement = Arrangement.End,
+                 ) {
+                     if (firstLaunch) {
++                        TextButton(onClick = onDismiss) { Text("Skip setup") }
+                         Button(
+-                            onClick = onDismiss,
++                            onClick = onStartSetup,
+                             colors = ButtonDefaults.buttonColors(backgroundColor = MaterialTheme.colors.secondary),
+-                        ) { Text("Get started", fontSize = 16.sp) }
++                        ) { Text("Let’s get started", fontSize = 16.sp) }
+                     } else {
+                         TextButton(onClick = onDismiss) { Text("Close") }
+                     }
+diff --git a/app/src/main/res/values/strings.xml b/app/src/main/res/values/strings.xml
+index 7a2cd229..21a616ab 100644
+--- a/app/src/main/res/values/strings.xml
++++ b/app/src/main/res/values/strings.xml
+@@ -245,9 +245,8 @@
+     <string name="kh_portrait_screen_position_summary">Position within the safe vertical space: 0% is highest, 20% is handheld style, and 50% is centred.</string>
+     <string name="kh_show_subtitles">Cutscene subtitles (KH Melon Mix)</string>
+     <string name="kh_show_subtitles_summary">Display subtitles during HD cutscene playback, when available. The language follows the Game language setting.</string>
+-    <string name="kh_prefer_landscape_cinematics">Prefer landscape HD cinematics</string>
+-    <string name="kh_prefer_landscape_cinematics_summary">Temporarily rotate HD cinematics to landscape, then restore the exact gameplay orientation when playback ends. The Rotate button can still change an individual cinematic.</string>
+-    <string name="kh_rotate_cinematic">Rotate cinematic</string>
++    <string name="kh_cinematic_landscape_direction">Cinematic landscape direction</string>
++    <string name="input_kh_cinematic_rotate">Cinematic Rotate</string>
+     <string name="kh_bgm_category">Remastered music (KH Melon Mix)</string>
+     <string name="kh_bgm_pack_days">358/2 Days music pack</string>
+     <string name="kh_bgm_pack_recoded">Re:coded music pack</string>
