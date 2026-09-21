@@ -11,23 +11,227 @@
 
 ---
 
-# Melon Mix: Saltlord's Remix (Android)
+## 👑 About Saltlord's Remix
 
-A personal passion project to create my ultimate way to play the Kingdom Hearts DS games on Android. 👑❤️
+**Saltlord's Remix began two days after the initial melonMix Android port was released.**
 
-358/2 Days is my favourite game in the KH franchise, and it’s always bothered me that there’s no easy, modern way to properly play it. So, despite not being an app developer, I decided to do something about it.
+When I discovered [Nireves333's](https://github.com/Nireves333) Android port of melonMix, I was immediately excited. Having melonMix running natively on Android was already an amazing foundation for playing the Kingdom Hearts DS games on modern devices.
 
-This melonMix fork uses AI heavily throughout development and is being built specifically around Android and touch: custom controls, display ratios and positioning, context-sensitive buttons, tailored overlay layouts and more.
+But actually playing 358/2 Days on a touchscreen also made me realise there were a few things missing if I wanted it to feel truly natural as an Android game rather than a DS game being played through touchscreen controls.
 
-358/2 Days is already working exactly how I envisioned it. Re:Coded is next.
+And this project started because I wanted to fix exactly **one** of them.
 
-I’ll release it publicly once it looks and feels like a proper app that anyone can pick up and use without fuss, and I intend to keep it updated alongside the main melonMix project.
+358/2 Days is my favourite game in the Kingdom Hearts series, and using shortcuts on a touchscreen meant awkwardly holding a virtual shoulder button while trying to press another virtual control at the same time.
 
-I’m not an app developer. I’m just a crazy KH superfan who apparently decided a port of a port needed another port. 💀
+So, just two days after the original Android port appeared, I started tinkering with my own fork. All I wanted was a touchscreen shortcut button that could toggle and hold the required input for me.
 
-Bug reports will absolutely be welcome when some of you inevitably try this thing, and I’ll do my best to squash them.
+That worked.
 
-And a MASSIVE thank you to [Nireves333](https://github.com/Nireves333), the original developer behind the melonMix Android port. None of what I’m doing here would exist without the work they put into bringing melonMix to Android in the first place. This fork is built on top of their work, and I’m incredibly grateful to have it as the foundation for this ridiculous little passion project. 💗
+Then I wanted a proper camera joystick.
+
+Then I wanted **two independent relative joysticks** that could be placed anywhere on the screen.
+
+Then I wanted the controls to actually look and behave like Kingdom Hearts controls instead of a generic DS overlay.
+
+Then came custom layouts, context-sensitive controls, display profiles, foldable support, game-specific behaviour, cinematic handling...
+
+And, well...
+
+**The rest is history.** 💀
+
+What began as a tiny personal modification to an already fantastic Android port has gradually become **Saltlord's Remix**: a touch-first fork built on Nireves333's melonMix Android port and designed specifically around **Kingdom Hearts 358/2 Days** and **Kingdom Hearts Re:Coded**.
+
+The aim isn't to replace melonMix or its Android port. It's to take that incredible foundation and build a more specialised experience on top of it — one designed around how these two games actually play on modern Android hardware.
+
+That means thinking about their controls, camera, command menus, shortcuts, cinematics and screen layouts not as generic Nintendo DS inputs that happen to be on a touchscreen, but as parts of an Android experience that should feel comfortable and intentional.
+
+The goal is simple:
+
+**Make the Kingdom Hearts DS games feel like they actually belong on the Android device you're playing them on.**
+
+---
+
+## ✨ What Saltlord's Remix brings to the table
+
+The Remix currently includes:
+
+- **Fully customisable touchscreen layouts**, with controls that can be positioned and resized around your device.
+- **Independent relative movement and camera joysticks**, allowing analogue-style touchscreen control without being tied to fixed joystick positions. You can set a custom region of the screen to act as camera and movement joysticks.
+- **Kingdom Hearts-style command controls** designed around the games rather than a generic DS button overlay.
+- **Touch-friendly shortcut controls**, including the feature that accidentally started this entire project: a shortcut toggle that can hold the required input for you.
+- **Dedicated touchscreen lock-on controls**.
+- **Context-sensitive controls** that appear only when they're relevant and stay out of the way during dialogue and cinematics.
+- **Automatic control hiding** designed to keep the screen clean when controls aren't needed. A custom timer can be set to auto-hide the controls or be deactivated entirely.
+- **Physical controller support**, including behaviour designed to keep unnecessary touchscreen controls out of the way when using a gamepad.
+- **Per-control customisation**, including positioning, sizing and opacity.
+- **Snap-to-grid layout editing** for cleaner and more consistent custom layouts.
+- **Multiple display profiles and aspect-ratio handling** designed around modern Android screens.
+- **Separate portrait and landscape pre-configured touchscreen layouts**.
+- **Foldable-aware layouts** designed around cover screens, unfolded displays and changing device orientations.
+- **HD replacement cinematics, subtitles and melonMix's existing enhancement features** integrated into the Remix experience.
+- New **Game-specific configuration** options for 358/2 Days and Re:Coded.
+- **Custom Saltlord's Remix interface, artwork and visual identity** inspired by the two games.
+- **Layout and configuration persistence across updates**, because spending an hour perfecting a touchscreen layout only to have an update nuke it would be deeply offensive.
+
+And yes, **Re:Coded works too.**
+
+What started as me obsessively modifying 358/2 Days has officially become a two-game project.
+
+---
+
+## 🔧 What's still being worked on
+
+Saltlord's Remix is approaching the point where I'm comfortable calling it ready for a proper public release, but there are still systems being polished, fixed and tested.
+
+Current work includes:
+
+- Finishing the **first-run Setup Wizard** so a fresh installation can be configured without digging through settings. The app will feel incredibly user-friendly upon release, meaning even those with limited emulation knowledge should be able to jump right in.
+- Finalising the **Saltlord's Remix interface, branding and light/dark themes**.
+- Improving **HD cinematic orientation handling** across conventional phones and foldables.
+- Adding **per-game HD cinematic orientation controls** for Automatic, Landscape and Portrait playback.
+- Fixing and verifying **touch-layout backup and restore**.
+- Improving the **Layout Editor**, including clearer Snap-to-Grid behaviour and a visible alignment grid.
+- Finalising the newest **default touchscreen layouts** for different display and orientation configurations.
+- Expanding the **Kingdom Hearts-style frontend menu sounds** while keeping them subtle enough that they don't drive everyone insane.
+- Tightening the game library around the **two games Saltlord's Remix is actually designed for**. No Pokémon or ambiguous other will run in this hen house.
+- Continuing to improve behaviour across different Android display sizes and form factors.
+- General bug fixing, regression testing and polishing the app until somebody can install it without needing me standing behind them explaining what seventeen different settings do.
+
+The intention isn't to keep piling features onto the project forever.
+
+The finish line is an app that somebody can install, point towards their own legally obtained game dumps and required assets, configure without fuss, and start playing.
+
+---
+
+## 📱 A very important device-testing disclaimer
+
+**Saltlord's Remix has been designed, developed and overwhelmingly tested on a Samsung Galaxy Z Fold8 Ultra.**
+
+That device is effectively Remix HQ.
+
+As a result, book-style foldable behaviour — particularly Fold cover-screen and unfolded-screen configurations — has received by far the most hands-on testing during development.
+
+I've tried to make the display, layout and control systems adaptable rather than hard-coding everything around one phone, but I unfortunately do not own every Android device ever created.
+
+This means bug reports from other form factors are **especially welcome**.
+
+If you're using:
+
+- A conventional candybar phone
+- A flip-style foldable
+- Another book-style foldable
+- A tablet
+- An unusually shaped Android device
+- Or some wonderfully cursed piece of hardware I never anticipated
+
+...please let me know if something doesn't behave properly.
+
+Screenshots, device information, reproduction steps and logs are incredibly useful.
+
+The goal is for Remix to work well beyond the device it was born on, and feedback from people actually using those devices is the best way to get there.
+
+---
+
+## 🤖 A note about AI, "vibe coding" and development
+
+I'll get this one out of the way:
+
+**I'm not an app developer.**
+
+I'm a Kingdom Hearts fan who wanted a shortcut button, had a very specific idea of how these games should feel on a modern touchscreen, and then made a series of increasingly questionable decisions until that somehow became an entire Android fork. 💀
+
+AI has been used heavily throughout the development of Saltlord's Remix.
+
+It has helped me understand and navigate an unfamiliar codebase, write and modify code, trace existing systems, debug problems and turn ideas I would not otherwise have had the technical ability to implement into working features.
+
+I'm not interested in pretending the project was made differently than it was.
+
+I also know there's plenty of discourse around AI-assisted or "vibe coded" software, particularly when it comes to Android ports.
+
+That's okay.
+
+**The simple reality is that Saltlord's Remix would not exist without AI.**
+
+This project was originally designed for me. It began as something I wanted to use personally, and AI gave me the ability to start building the version of these games that had been living in my head despite not having a conventional software-development background.
+
+That doesn't mean every implementation will be perfect the first time, and it certainly doesn't mean bugs won't exist.
+
+They will.
+
+Software written entirely by experienced human developers has bugs too. What matters to me is that when issues are discovered, they can be identified, reproduced, understood and addressed.
+
+And that's also why this project is open source.
+
+If you're an experienced developer and look at something I've implemented and think:
+
+> "There is a much better way to do this."
+
+**Please contribute it.**
+
+Seriously.
+
+Code improvements, fixes, optimisation, cleanup, suggestions and pull requests are welcome. I'd much rather somebody contribute a better solution than pretend a personal project created with heavy AI assistance has nothing left to learn.
+
+The same goes for users.
+
+Good bug reports are contributions too.
+
+If something breaks, tell me what happened. If you can reproduce it, tell me how. If it only explodes on your specific phone when it's upside down during a full moon, I would still genuinely like to know.
+
+Saltlord's Remix started as a port made for me.
+
+If it can become a great way for other people to experience these games too, that's a very happy accident. ❤️
+
+---
+
+## ❤️ Credits & thanks
+
+**Saltlord's Remix would not exist without melonMix or the people whose work brought it to Android.**
+
+A massive thank you to [Nireves333](https://github.com/Nireves333), the developer behind the original **melonMix Android port** that this fork is built upon.
+
+Their work provided the Android foundation that made this entire project possible. Without it, there would have been no shortcut button to modify, no touchscreen experience for me to obsess over, and almost certainly no Saltlord's Remix.
+
+Just as importantly, enormous credit belongs to the **original melonMix developers and contributors** whose work made this enhanced way of experiencing the Kingdom Hearts DS games possible in the first place.
+
+Saltlord's Remix is built **on top of that work, not in place of it**.
+
+My contribution is focused primarily on reshaping and extending the Android experience around touchscreen play, modern display ratios, foldables, game-specific controls and the particular needs of 358/2 Days and Re:Coded.
+
+Additional community work, artwork and assets used by Saltlord's Remix will also be credited individually where applicable.
+
+Thank you to everyone whose work sits underneath this increasingly elaborate project.
+
+It is genuinely wild to me how far this has come.
+
+All because I wanted **one goddamn shortcut button.** ❤️
+
+---
+
+## 🐛 Bugs, feedback & contributions
+
+If you're testing Saltlord's Remix and find a problem, please report it.
+
+When possible, include:
+
+- Your device and Android version
+- Which game you're playing
+- Your screen/orientation configuration
+- What you expected to happen
+- What actually happened
+- Steps that reliably reproduce the issue
+- Screenshots or screen recordings where useful
+- Logs where available
+
+Reports from devices other than the Galaxy Z Fold8 Ultra are particularly useful while the project expands beyond its primary development hardware.
+
+Code contributions and pull requests are also welcome.
+
+If you know more than I do and can make something better, **please do**. That's one of the reasons the source is here.
+
+---
+
+*Saltlord's Remix is an unofficial fan project and is not affiliated with or endorsed by Square Enix, Disney, Nintendo or the respective rights holders. No commercial game ROMs are distributed with this project. Users are responsible for providing their own legally obtained game dumps and any required assets.*
 
 ---
 
