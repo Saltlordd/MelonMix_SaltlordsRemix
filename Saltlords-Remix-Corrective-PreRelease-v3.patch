@@ -1,0 +1,1320 @@
+diff --git a/app/src/main/java/me/magnum/melonds/di/MelonModule.kt b/app/src/main/java/me/magnum/melonds/di/MelonModule.kt
+index 4015b0a3..c59d1c3a 100644
+--- a/app/src/main/java/me/magnum/melonds/di/MelonModule.kt
++++ b/app/src/main/java/me/magnum/melonds/di/MelonModule.kt
+@@ -58,8 +58,8 @@ object MelonModule {
+ 
+     @Provides
+     @Singleton
+-    fun provideSettingsBackupManager(@ApplicationContext context: Context, sharedPreferences: SharedPreferences): SettingsBackupManager {
+-        return SettingsBackupManager(context, sharedPreferences)
++    fun provideSettingsBackupManager(@ApplicationContext context: Context, sharedPreferences: SharedPreferences, layoutsRepository: LayoutsRepository, gson: Gson): SettingsBackupManager {
++        return SettingsBackupManager(context, sharedPreferences, layoutsRepository, gson)
+     }
+ 
+     @Provides
+diff --git a/app/src/main/java/me/magnum/melonds/domain/model/rom/config/RomConfig.kt b/app/src/main/java/me/magnum/melonds/domain/model/rom/config/RomConfig.kt
+index 478ff9e7..bcd07fc8 100644
+--- a/app/src/main/java/me/magnum/melonds/domain/model/rom/config/RomConfig.kt
++++ b/app/src/main/java/me/magnum/melonds/domain/model/rom/config/RomConfig.kt
+@@ -9,6 +9,7 @@ data class RomConfig(
+     val gbaSlotConfig: RomGbaSlotConfig = RomGbaSlotConfig.None,
+     val customName: String? = null,
+     val launchDisplayProfile: LaunchDisplayProfile = LaunchDisplayProfile.AUTOMATIC,
++    val hdCinematicOrientation: HdCinematicOrientation = HdCinematicOrientation.AUTOMATIC,
+ ) {
+ 
+     companion object {
+diff --git a/app/src/main/java/me/magnum/melonds/domain/repositories/LayoutsRepository.kt b/app/src/main/java/me/magnum/melonds/domain/repositories/LayoutsRepository.kt
+index 23997223..f08dc36b 100644
+--- a/app/src/main/java/me/magnum/melonds/domain/repositories/LayoutsRepository.kt
++++ b/app/src/main/java/me/magnum/melonds/domain/repositories/LayoutsRepository.kt
+@@ -5,10 +5,11 @@ import me.magnum.melonds.domain.model.layout.LayoutConfiguration
+ import java.util.UUID
+ 
+ interface LayoutsRepository {
++    suspend fun reloadFromStorage()
+     fun getLayouts(): Flow<List<LayoutConfiguration>>
+     suspend fun getLayout(id: UUID): LayoutConfiguration?
+     suspend fun deleteLayout(layout: LayoutConfiguration)
+     fun getGlobalLayoutPlaceholder(): LayoutConfiguration
+     fun observeLayout(id: UUID): Flow<LayoutConfiguration>
+     suspend fun saveLayout(layout: LayoutConfiguration)
+-}
+\ No newline at end of file
++}
+diff --git a/app/src/main/java/me/magnum/melonds/domain/repositories/SettingsRepository.kt b/app/src/main/java/me/magnum/melonds/domain/repositories/SettingsRepository.kt
+index 0d75656b..a949689a 100644
+--- a/app/src/main/java/me/magnum/melonds/domain/repositories/SettingsRepository.kt
++++ b/app/src/main/java/me/magnum/melonds/domain/repositories/SettingsRepository.kt
+@@ -57,7 +57,6 @@ interface SettingsRepository {
+     fun getKhShowSubtitles(): Flow<Boolean>
+     fun getKhSingleScreenMode(): Flow<Boolean>
+     fun getKhPortraitScreenPosition(): Flow<Int>
+-    fun getKhPreferLandscapeCinematics(): Flow<Boolean>
+ 
+     fun getRomSortingMode(): SortingMode
+     fun getRomSortingOrder(): SortingOrder
+diff --git a/app/src/main/java/me/magnum/melonds/impl/FileSystemRomsRepository.kt b/app/src/main/java/me/magnum/melonds/impl/FileSystemRomsRepository.kt
+index c75526a6..93a4c420 100644
+--- a/app/src/main/java/me/magnum/melonds/impl/FileSystemRomsRepository.kt
++++ b/app/src/main/java/me/magnum/melonds/impl/FileSystemRomsRepository.kt
+@@ -23,6 +23,7 @@ import me.magnum.melonds.common.romprocessors.RomFileProcessorFactory
+ import me.magnum.melonds.domain.model.RomScanningStatus
+ import me.magnum.melonds.domain.model.rom.Rom
+ import me.magnum.melonds.domain.model.rom.config.RomConfig
++import me.magnum.melonds.domain.model.rom.config.LaunchDisplayProfile
+ import me.magnum.melonds.domain.repositories.RomsRepository
+ import me.magnum.melonds.domain.repositories.SettingsRepository
+ import me.magnum.melonds.impl.dtos.rom.RomDto
+@@ -46,6 +47,7 @@ class FileSystemRomsRepository(
+     companion object {
+         private const val TAG = "FSRomsRepository"
+         private const val ROM_DATA_FILE = "rom_data.json"
++        private val SUPPORTED_KH_GAME_CODES = setOf("YKGP", "YKGJ", "YKGE", "BK9P", "BK9J", "BK9E")
+     }
+ 
+     private val coroutineScope = CoroutineScope(Dispatchers.IO)
+@@ -126,6 +128,7 @@ class FileSystemRomsRepository(
+ 
+         // ROM is not known. Create a new ROM from the URI
+         romFileProcessorFactory.getFileRomProcessorForDocument(uri)?.getRomFromUri(uri, null)
++            ?.takeIf(::isSupportedKhRom)
+     }
+ 
+     private fun findRomByPath(roms: List<Rom>, uri: Uri): Rom? {
+@@ -199,6 +202,7 @@ class FileSystemRomsRepository(
+     }
+ 
+     private fun addRom(rom: Rom) {
++        if (!isSupportedKhRom(rom)) return
+         val existingRom = roms.find { it.hasSameFileAsRom(rom) }
+         if (existingRom == rom) {
+             return
+@@ -215,7 +219,11 @@ class FileSystemRomsRepository(
+             roms.remove(existingRom)
+             roms.add(updatedRom)
+         } else {
+-            roms.add(rom)
++            val initial = androidx.preference.PreferenceManager.getDefaultSharedPreferences(context)
++                .getString("kh_initial_display_profile", "AUTOMATIC")
++                ?.let { runCatching { LaunchDisplayProfile.valueOf(it) }.getOrNull() }
++                ?: LaunchDisplayProfile.AUTOMATIC
++            roms.add(rom.copy(config = rom.config.copy(launchDisplayProfile = initial)))
+         }
+ 
+         onRomsChanged()
+@@ -240,7 +248,7 @@ class FileSystemRomsRepository(
+         scanningStatus.value = RomScanningStatus.SCANNING
+ 
+         val cachedRoms = getCachedRoms().filter {
+-            DocumentFile.fromSingleUri(context, it.uri)?.exists() == true
++            DocumentFile.fromSingleUri(context, it.uri)?.exists() == true && isSupportedKhRom(it)
+         }
+ 
+         roms.addAll(cachedRoms)
+@@ -270,7 +278,8 @@ class FileSystemRomsRepository(
+             }
+ 
+             romFileProcessorFactory.getFileRomProcessorForDocument(file)?.let { fileRomProcessor ->
+-                fileRomProcessor.getRomFromUri(file.uri, directory.uri)?.let { collector.emit(it) }
++                fileRomProcessor.getRomFromUri(file.uri, directory.uri)
++                    ?.takeIf(::isSupportedKhRom)?.let { collector.emit(it) }
+             }
+         }
+     }
+@@ -288,6 +297,12 @@ class FileSystemRomsRepository(
+         }.getOrElse { emptyList() }
+     }
+ 
++    private fun isSupportedKhRom(rom: Rom): Boolean {
++        val processor = romFileProcessorFactory.getFileRomProcessorForDocument(rom.uri) ?: return false
++        val gameCode = processor.getRomInfo(rom)?.gameCode ?: return false
++        return gameCode in SUPPORTED_KH_GAME_CODES
++    }
++
+     private fun saveRomData(romData: List<Rom>) {
+         val cacheFile = File(context.filesDir, ROM_DATA_FILE)
+ 
+@@ -304,4 +319,4 @@ class FileSystemRomsRepository(
+             Log.e(TAG, "Failed to save ROM data", e)
+         }
+     }
+-}
+\ No newline at end of file
++}
+diff --git a/app/src/main/java/me/magnum/melonds/impl/InternalLayoutsRepository.kt b/app/src/main/java/me/magnum/melonds/impl/InternalLayoutsRepository.kt
+index 8133449d..757fc666 100644
+--- a/app/src/main/java/me/magnum/melonds/impl/InternalLayoutsRepository.kt
++++ b/app/src/main/java/me/magnum/melonds/impl/InternalLayoutsRepository.kt
+@@ -43,6 +43,27 @@ class InternalLayoutsRepository(private val context: Context, private val gson:
+     private var areLayoutsLoaded = false
+     private val layouts = MutableStateFlow<List<Deletable<LayoutConfiguration>>>(emptyList())
+ 
++    override suspend fun reloadFromStorage() = withContext(Dispatchers.IO) {
++        layoutsLoadLock.withLock {
++            // A backup can replace layouts.json while this singleton is alive. Publish the
++            // restored models so editor observers and the active emulator see the new data.
++            val dataFile = File(context.filesDir, DATA_FILE)
++            require(dataFile.isFile) { "Restored layout file is missing" }
++            val restored = FileReader(dataFile).use { reader ->
++                gson.fromJson<List<LayoutConfigurationDto>>(reader, layoutListType)?.map { it.toModel() }
++            } ?: error("Restored layout file is invalid")
++            require(restored.isNotEmpty()) { "Restored layout file is empty" }
++            layouts.value = buildList {
++                add(Deletable(buildDefaultLayout(), false))
++                add(Deletable(restored.firstOrNull { it.id == LayoutConfiguration.KH_TOUCH_REMIX_ID }
++                    ?: buildKhTouchRemixLayout(), false))
++                addAll(restored.filterNot { it.id == LayoutConfiguration.KH_TOUCH_REMIX_ID }
++                    .map { Deletable(it, false) })
++            }
++            areLayoutsLoaded = true
++        }
++    }
++
+     private val mGlobalLayoutPlaceholder by lazy {
+         LayoutConfiguration(
+             null,
+diff --git a/app/src/main/java/me/magnum/melonds/impl/SettingsBackupManager.kt b/app/src/main/java/me/magnum/melonds/impl/SettingsBackupManager.kt
+index 1b8b6ece..d48f4f44 100644
+--- a/app/src/main/java/me/magnum/melonds/impl/SettingsBackupManager.kt
++++ b/app/src/main/java/me/magnum/melonds/impl/SettingsBackupManager.kt
+@@ -3,7 +3,12 @@ package me.magnum.melonds.impl
+ import android.content.Context
+ import android.content.SharedPreferences
+ import android.net.Uri
++import com.google.gson.Gson
++import com.google.gson.reflect.TypeToken
++import me.magnum.melonds.impl.dtos.layout.LayoutConfigurationDto
+ import androidx.documentfile.provider.DocumentFile
++import kotlinx.coroutines.runBlocking
++import me.magnum.melonds.domain.repositories.LayoutsRepository
+ import dagger.hilt.android.qualifiers.ApplicationContext
+ import org.json.JSONArray
+ import org.json.JSONObject
+@@ -15,6 +20,8 @@ import javax.inject.Singleton
+ class SettingsBackupManager @Inject constructor(
+     @param:ApplicationContext private val context: Context,
+     private val preferences: SharedPreferences,
++    private val layoutsRepository: LayoutsRepository,
++    private val gson: Gson,
+ ) {
+     companion object {
+         private const val SETTINGS_FILE = "settings.json"
+@@ -158,6 +165,7 @@ class SettingsBackupManager @Inject constructor(
+                     input.copyTo(output)
+                 }
+             }
++            runBlocking { layoutsRepository.reloadFromStorage() }
+         }
+ 
+         val romDataDoc = root.findFile(ROM_DATA_FILE)
+@@ -188,55 +196,66 @@ class SettingsBackupManager @Inject constructor(
+     }
+ 
+     private fun backupFilteredLayout(treeUri: Uri, fileName: String, target: String) {
+-        val root = DocumentFile.fromTreeUri(context, treeUri) ?: return
+-
+-        val layoutsSrc = File(context.filesDir, LAYOUTS_FILE)
+-        if (!layoutsSrc.exists()) return
+-
+-        val layoutsText = runCatching { layoutsSrc.readText() }.getOrNull() ?: return
+-        val allLayouts = runCatching { JSONArray(layoutsText) }.getOrNull() ?: return
+-        val filtered = JSONArray()
+-        for (i in 0 until allLayouts.length()) {
+-            val obj = allLayouts.optJSONObject(i) ?: continue
+-            if (obj.optString("target") == target) {
+-                filtered.put(obj)
+-            }
+-        }
+-
+-        val dest = root.findFile(fileName) ?: root.createFile("application/json", fileName) ?: return
+-        context.contentResolver.openOutputStream(dest.uri)?.use { out ->
+-            out.writer().use { it.write(filtered.toString()) }
+-        }
++        val root = DocumentFile.fromTreeUri(context, treeUri) ?: error("Cannot open backup folder")
++        val source = File(context.filesDir, LAYOUTS_FILE)
++        require(source.isFile) { "No saved layouts to back up" }
++        // Layout configurations hold both internal and external variants nested in each
++        // entry. There is no top-level `target` key to filter on.
++        val text = source.readText()
++        validateLayouts(JSONArray(text))
++        val dest = root.findFile(fileName) ?: root.createFile("application/json", fileName)
++            ?: error("Cannot create layout backup")
++        context.contentResolver.openOutputStream(dest.uri)?.use { output ->
++            output.writer().use { it.write(text) }
++        } ?: error("Cannot write layout backup")
+     }
+ 
+     private fun restoreFilteredLayout(treeUri: Uri, fileName: String, target: String) {
+-        val root = DocumentFile.fromTreeUri(context, treeUri) ?: return
+-        val src = root.findFile(fileName) ?: return
+-
+-        val backupArray = context.contentResolver.openInputStream(src.uri)?.use { input ->
+-            runCatching { JSONArray(input.reader().readText()) }.getOrNull()
+-        } ?: return
+-
+-        val layoutsFile = File(context.filesDir, LAYOUTS_FILE)
+-        val existingArray = if (layoutsFile.exists()) {
+-            runCatching { JSONArray(layoutsFile.readText()) }.getOrElse { JSONArray() }
+-        } else {
+-            JSONArray()
+-        }
+-
++        val root = DocumentFile.fromTreeUri(context, treeUri) ?: error("Cannot open backup folder")
++        val source = root.findFile(fileName) ?: error("Layout backup is missing")
++        val backedUp = context.contentResolver.openInputStream(source.uri)?.use { input ->
++            JSONArray(input.reader().readText())
++        } ?: error("Cannot read layout backup")
++        validateLayouts(backedUp)
++        val dest = File(context.filesDir, LAYOUTS_FILE)
++        val existing = if (dest.exists()) JSONArray(dest.readText()) else JSONArray()
++        val backedUpIds = (0 until backedUp.length()).map {
++            backedUp.getJSONObject(it).getString("id")
++        }.toSet()
+         val merged = JSONArray()
+-        for (i in 0 until existingArray.length()) {
+-            val obj = existingArray.optJSONObject(i) ?: continue
+-            if (obj.optString("target") != target) {
+-                merged.put(obj)
+-            }
++        for (i in 0 until existing.length()) {
++            val entry = existing.getJSONObject(i)
++            if (entry.optString("id") !in backedUpIds) merged.put(entry)
+         }
+-        for (i in 0 until backupArray.length()) {
+-            merged.put(backupArray.getJSONObject(i))
++        for (i in 0 until backedUp.length()) merged.put(backedUp.getJSONObject(i))
++        validateLayouts(merged)
++        // Do not acknowledge restoration until the repository has loaded and published it.
++        val temporary = File(context.filesDir, "layouts-restoring.json")
++        temporary.writeText(merged.toString())
++        val original = if (dest.exists()) dest.readText() else null
++        try {
++            temporary.copyTo(dest, overwrite = true)
++            runBlocking { layoutsRepository.reloadFromStorage() }
++        } catch (failure: Exception) {
++            if (original == null) dest.delete() else dest.writeText(original)
++            runBlocking { layoutsRepository.reloadFromStorage() }
++            throw failure
++        } finally {
++            temporary.delete()
+         }
+-        layoutsFile.outputStream().use { out ->
+-            out.writer().use { it.write(merged.toString()) }
++    }
++
++    private fun validateLayouts(layouts: JSONArray) {
++        require(layouts.length() > 0) { "Layout backup is empty" }
++        for (i in 0 until layouts.length()) {
++            val entry = layouts.getJSONObject(i)
++            require(entry.has("id") && entry.has("type") && entry.has("orientation") && entry.has("layoutVariants")) {
++                "Layout backup has an incompatible format"
++            }
+         }
++        val type = object : TypeToken<List<LayoutConfigurationDto>>() {}.type
++        val parsed = gson.fromJson<List<LayoutConfigurationDto>>(layouts.toString(), type)
++            ?.map { it.toModel() } ?: error("Layout backup cannot be parsed")
++        require(parsed.isNotEmpty()) { "Layout backup is empty" }
+     }
+ }
+-
+diff --git a/app/src/main/java/me/magnum/melonds/impl/SharedPreferencesSettingsRepository.kt b/app/src/main/java/me/magnum/melonds/impl/SharedPreferencesSettingsRepository.kt
+index 7309f30b..2a1dee26 100644
+--- a/app/src/main/java/me/magnum/melonds/impl/SharedPreferencesSettingsRepository.kt
++++ b/app/src/main/java/me/magnum/melonds/impl/SharedPreferencesSettingsRepository.kt
+@@ -376,11 +376,7 @@ class SharedPreferencesSettingsRepository(
+         }
+     }
+ 
+-    override fun getKhPreferLandscapeCinematics(): Flow<Boolean> {
+-        return getOrCreatePreferenceSharedFlow("kh_prefer_landscape_cinematics") {
+-            preferences.getBoolean("kh_prefer_landscape_cinematics", true)
+-        }
+-    }
++
+ 
+     override fun getRenderStrategy(): Flow<RenderStrategy> {
+         return getOrCreatePreferenceSharedFlow("front_rendering") {
+diff --git a/app/src/main/java/me/magnum/melonds/impl/dtos/rom/RomConfigDto.kt b/app/src/main/java/me/magnum/melonds/impl/dtos/rom/RomConfigDto.kt
+index bf4313ba..8225112d 100644
+--- a/app/src/main/java/me/magnum/melonds/impl/dtos/rom/RomConfigDto.kt
++++ b/app/src/main/java/me/magnum/melonds/impl/dtos/rom/RomConfigDto.kt
+@@ -1,5 +1,6 @@
+ package me.magnum.melonds.impl.dtos.rom
+ 
++import me.magnum.melonds.domain.model.rom.config.HdCinematicOrientation
+ import com.google.gson.annotations.SerializedName
+ import me.magnum.melonds.domain.model.rom.config.RomConfig
+ import me.magnum.melonds.domain.model.rom.config.LaunchDisplayProfile
+@@ -20,6 +21,8 @@ data class RomConfigDto(
+     val customName: String? = null,
+     @SerializedName("launchDisplayProfile")
+     val launchDisplayProfile: LaunchDisplayProfile? = null,
++    @SerializedName("hdCinematicOrientation")
++    val hdCinematicOrientation: HdCinematicOrientation? = null,
+ ) {
+ 
+     companion object {
+@@ -31,6 +34,7 @@ data class RomConfigDto(
+                 RomGbaSlotConfigDto.fromModel(romConfig.gbaSlotConfig),
+                 romConfig.customName,
+                 romConfig.launchDisplayProfile,
++                romConfig.hdCinematicOrientation,
+             )
+         }
+     }
+@@ -45,6 +49,7 @@ data class RomConfigDto(
+             launchDisplayProfile = launchDisplayProfile
+                 ?.takeUnless { it == LaunchDisplayProfile.FLEX_MODE }
+                 ?: LaunchDisplayProfile.AUTOMATIC,
++            hdCinematicOrientation = hdCinematicOrientation ?: HdCinematicOrientation.AUTOMATIC,
+         )
+     }
+ }
+diff --git a/app/src/main/java/me/magnum/melonds/parcelables/RomConfigParcelable.kt b/app/src/main/java/me/magnum/melonds/parcelables/RomConfigParcelable.kt
+index 790afebf..f3a00a3e 100644
+--- a/app/src/main/java/me/magnum/melonds/parcelables/RomConfigParcelable.kt
++++ b/app/src/main/java/me/magnum/melonds/parcelables/RomConfigParcelable.kt
+@@ -1,5 +1,6 @@
+ package me.magnum.melonds.parcelables
+ 
++import me.magnum.melonds.domain.model.rom.config.HdCinematicOrientation
+ import android.os.Parcel
+ import android.os.Parcelable
+ import me.magnum.melonds.domain.model.rom.config.RomConfig
+@@ -24,6 +25,7 @@ class RomConfigParcelable : Parcelable {
+             gbaSlotConfig = parcel.parcelable<RomGbaSlotConfigParcelable>()!!.gbaSlotConfig,
+             customName = parcel.readString(),
+             launchDisplayProfile = LaunchDisplayProfile.entries.getOrElse(parcel.readInt()) { LaunchDisplayProfile.AUTOMATIC },
++            hdCinematicOrientation = if (parcel.dataAvail() > 0) HdCinematicOrientation.entries.getOrElse(parcel.readInt()) { HdCinematicOrientation.AUTOMATIC } else HdCinematicOrientation.AUTOMATIC,
+         )
+     }
+ 
+@@ -34,6 +36,7 @@ class RomConfigParcelable : Parcelable {
+         dest.writeParcelable(RomGbaSlotConfigParcelable(romConfig.gbaSlotConfig), 0)
+         dest.writeString(romConfig.customName)
+         dest.writeInt(romConfig.launchDisplayProfile.ordinal)
++        dest.writeInt(romConfig.hdCinematicOrientation.ordinal)
+     }
+ 
+     override fun describeContents(): Int {
+diff --git a/app/src/main/java/me/magnum/melonds/ui/emulator/EmulatorActivity.kt b/app/src/main/java/me/magnum/melonds/ui/emulator/EmulatorActivity.kt
+index b645dd84..04ea6e37 100644
+--- a/app/src/main/java/me/magnum/melonds/ui/emulator/EmulatorActivity.kt
++++ b/app/src/main/java/me/magnum/melonds/ui/emulator/EmulatorActivity.kt
+@@ -65,6 +65,7 @@ import me.magnum.melonds.domain.model.layout.LayoutComponent
+ import me.magnum.melonds.domain.model.layout.ScreenFold
+ import me.magnum.melonds.domain.model.rewind.RewindWindowPosition
+ import me.magnum.melonds.domain.model.rom.Rom
++import me.magnum.melonds.domain.model.rom.config.HdCinematicOrientation
+ import me.magnum.melonds.domain.model.rom.config.LaunchDisplayProfile
+ import me.magnum.melonds.domain.model.rom.config.RomGbaSlotConfig
+ import me.magnum.melonds.domain.model.ui.Orientation
+@@ -140,7 +141,6 @@ class EmulatorActivity : AppCompatActivity() {
+     private lateinit var binding: ActivityEmulatorBinding
+     private var khLaunchDisplayProfile = LaunchDisplayProfile.AUTOMATIC
+     private var khOrientationBeforeCinematic: Int? = null
+-    private var khCinematicRequestedOrientation: Int? = null
+     private val viewModel: EmulatorViewModel by viewModels(
+         extrasProducer = {
+             val extras = MutableCreationExtras(defaultViewModelCreationExtras)
+@@ -402,12 +402,10 @@ class EmulatorActivity : AppCompatActivity() {
+                 // the skip menu is open (desktop: windowPauseVideo/windowUnpauseVideo) and
+                 // while the emulator core is paused (app pause menu, save-state wraps).
+                 val khCutsceneState = viewModel.khCutscene.collectAsState()
+-                val khPreferLandscapeCinematics = viewModel.khPreferLandscapeCinematics.collectAsState(initial = true)
+-                LaunchedEffect(khCutsceneState.value?.videoPath, khPreferLandscapeCinematics.value) {
+-                    updateKhCinematicOrientation(
+-                        isPlaying = khCutsceneState.value != null,
+-                        preferLandscape = khPreferLandscapeCinematics.value,
+-                    )
++                LaunchedEffect(khCutsceneState.value?.videoPath) {
++                    val orientation = (LaunchArgs.fromIntent(intent) as? LaunchArgs.RomObject)
++                        ?.rom?.config?.hdCinematicOrientation ?: HdCinematicOrientation.AUTOMATIC
++                    updateKhCinematicOrientation(khCutsceneState.value != null, orientation)
+                 }
+                 val khTouchControlSceneMode = viewModel.khTouchControlSceneMode.collectAsState()
+                 LaunchedEffect(khTouchControlSceneMode.value) {
+@@ -422,7 +420,6 @@ class EmulatorActivity : AppCompatActivity() {
+                     viewportBounds = khTopScreenRect.value.takeIf {
+                         khLaunchDisplayProfile == LaunchDisplayProfile.FLEX_MODE
+                     },
+-                    onRotate = ::rotateKhCinematic,
+                     onEnded = { MelonEmulator.onKhCutsceneEnded() },
+                     onFailed = { MelonEmulator.onKhCutsceneFailed(it) },
+                 )
+@@ -1008,38 +1005,23 @@ class EmulatorActivity : AppCompatActivity() {
+         }
+     }
+ 
+-    private fun updateKhCinematicOrientation(isPlaying: Boolean, preferLandscape: Boolean) {
++    private fun updateKhCinematicOrientation(isPlaying: Boolean, orientation: HdCinematicOrientation) {
+         if (isPlaying) {
+             if (khOrientationBeforeCinematic == null) {
+                 khOrientationBeforeCinematic = requestedOrientation
+             }
+-            if (preferLandscape && khCinematicRequestedOrientation == null) {
+-                setKhCinematicOrientation(ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE)
++            when (orientation) {
++                HdCinematicOrientation.AUTOMATIC -> Unit
++                HdCinematicOrientation.LANDSCAPE -> requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
++                HdCinematicOrientation.PORTRAIT -> requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT
+             }
+         } else {
+             val gameplayOrientation = khOrientationBeforeCinematic ?: return
+             khOrientationBeforeCinematic = null
+-            khCinematicRequestedOrientation = null
+             requestedOrientation = gameplayOrientation
+         }
+     }
+ 
+-    private fun rotateKhCinematic() {
+-        if (khOrientationBeforeCinematic == null) return
+-        val currentTarget = khCinematicRequestedOrientation
+-        val isLandscape = currentTarget == ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE ||
+-            (currentTarget == null && resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE)
+-        setKhCinematicOrientation(
+-            if (isLandscape) ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT
+-            else ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+-        )
+-    }
+-
+-    private fun setKhCinematicOrientation(orientation: Int) {
+-        khCinematicRequestedOrientation = orientation
+-        requestedOrientation = orientation
+-    }
+-
+     /**
+      * [KHMM v21] Observe the actual enhanced-screen child. Fold posture and rotation can change
+      * its rectangle after the full-window RuntimeLayoutView has already finished laying out;
+diff --git a/app/src/main/java/me/magnum/melonds/ui/emulator/EmulatorViewModel.kt b/app/src/main/java/me/magnum/melonds/ui/emulator/EmulatorViewModel.kt
+index b61a0224..0d3c263b 100644
+--- a/app/src/main/java/me/magnum/melonds/ui/emulator/EmulatorViewModel.kt
++++ b/app/src/main/java/me/magnum/melonds/ui/emulator/EmulatorViewModel.kt
+@@ -167,7 +167,6 @@ class EmulatorViewModel @Inject constructor(
+     // emulator surface while the muted emulator fast-forwards behind it.
+     private val _khCutscene = MutableStateFlow<KhCutsceneState?>(null)
+     val khCutscene = _khCutscene.asStateFlow()
+-    val khPreferLandscapeCinematics = settingsRepository.getKhPreferLandscapeCinematics()
+ 
+     private val _khTouchControlSceneMode = MutableStateFlow(0)
+     val khTouchControlSceneMode = _khTouchControlSceneMode.asStateFlow()
+@@ -931,13 +930,8 @@ class EmulatorViewModel @Inject constructor(
+         val flexMode = variant.folds.any {
+             it.orientation == Orientation.LANDSCAPE && it.type == ScreenFold.FoldType.SEAMLESS
+         }
+-        val drawableId = when {
+-            flexMode -> R.drawable.kh_bg_unfolded_landscape
+-            unfolded && portrait -> R.drawable.kh_bg_unfolded_portrait
+-            unfolded -> R.drawable.kh_bg_unfolded_landscape
+-            portrait -> R.drawable.kh_bg_folded_portrait
+-            else -> R.drawable.kh_bg_folded_landscape
+-        }
++        // One source image for every screen and posture; FILL_CENTER crops without stretching.
++        val drawableId = R.drawable.kh_bg_remix
+         val uri = Uri.parse("android.resource://${context.packageName}/$drawableId")
+         return RuntimeBackground(Background(null, "KHDS: TOUCH REMIX", uri), BackgroundMode.FILL_CENTER)
+     }
+diff --git a/app/src/main/java/me/magnum/melonds/ui/emulator/ui/KhCutscenePlayerUi.kt b/app/src/main/java/me/magnum/melonds/ui/emulator/ui/KhCutscenePlayerUi.kt
+index ca027b37..e37eaa1a 100644
+--- a/app/src/main/java/me/magnum/melonds/ui/emulator/ui/KhCutscenePlayerUi.kt
++++ b/app/src/main/java/me/magnum/melonds/ui/emulator/ui/KhCutscenePlayerUi.kt
+@@ -78,7 +78,6 @@ fun KhCutscenePlayerUi(
+     state: KhCutsceneState?,
+     paused: Boolean,
+     viewportBounds: Rect? = null,
+-    onRotate: () -> Unit,
+     onEnded: () -> Unit,
+     onFailed: (String) -> Unit,
+ ) {
+@@ -213,20 +212,6 @@ fun KhCutscenePlayerUi(
+                 )
+             }
+         }
+-        IconButton(
+-            onClick = onRotate,
+-            modifier = Modifier
+-                .align(Alignment.TopEnd)
+-                .padding(12.dp)
+-                .clip(CircleShape)
+-                .background(Color.Black.copy(alpha = 0.62f)),
+-        ) {
+-            Icon(
+-                imageVector = Icons.Default.ScreenRotation,
+-                contentDescription = stringResource(R.string.kh_rotate_cinematic),
+-                tint = Color.White,
+-            )
+-        }
+     }
+ }
+ 
+diff --git a/app/src/main/java/me/magnum/melonds/ui/layouteditor/LayoutEditorView.kt b/app/src/main/java/me/magnum/melonds/ui/layouteditor/LayoutEditorView.kt
+index e29f4e1a..4ab50a7b 100644
+--- a/app/src/main/java/me/magnum/melonds/ui/layouteditor/LayoutEditorView.kt
++++ b/app/src/main/java/me/magnum/melonds/ui/layouteditor/LayoutEditorView.kt
+@@ -1,6 +1,8 @@
+ package me.magnum.melonds.ui.layouteditor
+ 
+ import android.content.Context
++import android.graphics.Canvas
++import android.graphics.Paint
+ import android.util.AttributeSet
+ import android.view.KeyEvent
+ import android.view.MotionEvent
+@@ -41,9 +43,15 @@ class LayoutEditorView(context: Context, attrs: AttributeSet?) : LayoutView(cont
+     private var selectedView: LayoutComponentView? = null
+     private var selectedViewAnchor = Anchor.TOP_LEFT
+     private var modifiedByUser = false
+-    private var gridSnappingEnabled = false
++    private val gridPreferences = context.getSharedPreferences("saltlords_layout_editor", Context.MODE_PRIVATE)
++    private var gridSnappingEnabled = gridPreferences.getBoolean("snap_to_grid", true)
++    private val gridPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
++        color = android.graphics.Color.argb(78, 145, 107, 65)
++        strokeWidth = context.dpToPixels(1f)
++    }
+ 
+     init {
++        setWillNotDraw(false)
+         super.setOnClickListener {
+             if (selectedView != null) {
+                 deselectCurrentView()
+@@ -80,9 +88,27 @@ class LayoutEditorView(context: Context, attrs: AttributeSet?) : LayoutView(cont
+ 
+     fun toggleGridSnapping(): Boolean {
+         gridSnappingEnabled = !gridSnappingEnabled
++        gridPreferences.edit().putBoolean("snap_to_grid", gridSnappingEnabled).apply()
++        invalidate()
+         return gridSnappingEnabled
+     }
+ 
++    override fun onDraw(canvas: Canvas) {
++        super.onDraw(canvas)
++        if (!gridSnappingEnabled) return
++        // Match snapToGrid's pixel origin and spacing; onDraw is behind child controls.
++        var x = gridSize.toFloat()
++        while (x < width) {
++            canvas.drawLine(x, 0f, x, height.toFloat(), gridPaint)
++            x += gridSize
++        }
++        var y = gridSize.toFloat()
++        while (y < height) {
++            canvas.drawLine(0f, y, width.toFloat(), y, gridPaint)
++            y += gridSize
++        }
++    }
++
+     fun buildCurrentLayout(): List<PositionedLayoutComponent> {
+         return views.values.map {
+             PositionedLayoutComponent(it.getRect(), it.component, it.baseAlpha, it.onTop)
+diff --git a/app/src/main/java/me/magnum/melonds/ui/romdetails/RomDetailsUiMapper.kt b/app/src/main/java/me/magnum/melonds/ui/romdetails/RomDetailsUiMapper.kt
+index 23e46efb..56469e85 100644
+--- a/app/src/main/java/me/magnum/melonds/ui/romdetails/RomDetailsUiMapper.kt
++++ b/app/src/main/java/me/magnum/melonds/ui/romdetails/RomDetailsUiMapper.kt
+@@ -1,5 +1,6 @@
+ package me.magnum.melonds.ui.romdetails
+ 
++import me.magnum.melonds.domain.model.rom.config.HdCinematicOrientation
+ import android.content.Context
+ import androidx.documentfile.provider.DocumentFile
+ import me.magnum.melonds.domain.model.rom.config.RomConfig
+@@ -22,6 +23,7 @@ class RomDetailsUiMapper(
+             gbaSlotConfig = mapGbaSlotConfigToUi(romConfig.gbaSlotConfig),
+             customName = romConfig.customName,
+             launchDisplayProfile = romConfig.launchDisplayProfile,
++            hdCinematicOrientation = romConfig.hdCinematicOrientation,
+         )
+     }
+ 
+diff --git a/app/src/main/java/me/magnum/melonds/ui/romdetails/RomDetailsViewModel.kt b/app/src/main/java/me/magnum/melonds/ui/romdetails/RomDetailsViewModel.kt
+index e8e56722..3bb2de0c 100644
+--- a/app/src/main/java/me/magnum/melonds/ui/romdetails/RomDetailsViewModel.kt
++++ b/app/src/main/java/me/magnum/melonds/ui/romdetails/RomDetailsViewModel.kt
+@@ -1,5 +1,6 @@
+ package me.magnum.melonds.ui.romdetails
+ 
++import me.magnum.melonds.domain.model.rom.config.HdCinematicOrientation
+ import androidx.lifecycle.SavedStateHandle
+ import androidx.lifecycle.ViewModel
+ import androidx.lifecycle.viewModelScope
+@@ -95,6 +96,7 @@ class RomDetailsViewModel @Inject constructor(
+                 }
+             }
+             is RomConfigUpdateEvent.CustomNameUpdate -> currentRomConfig.copy(customName = event.customName)
++            is RomConfigUpdateEvent.HdCinematicOrientationUpdate -> currentRomConfig.copy(hdCinematicOrientation = event.orientation)
+             is RomConfigUpdateEvent.LaunchDisplayProfileUpdate -> currentRomConfig.copy(launchDisplayProfile = event.profile)
+         }
+ 
+diff --git a/app/src/main/java/me/magnum/melonds/ui/romdetails/model/RomConfigUiModel.kt b/app/src/main/java/me/magnum/melonds/ui/romdetails/model/RomConfigUiModel.kt
+index 8199a0e2..6a070041 100644
+--- a/app/src/main/java/me/magnum/melonds/ui/romdetails/model/RomConfigUiModel.kt
++++ b/app/src/main/java/me/magnum/melonds/ui/romdetails/model/RomConfigUiModel.kt
+@@ -1,5 +1,6 @@
+ package me.magnum.melonds.ui.romdetails.model
+ 
++import me.magnum.melonds.domain.model.rom.config.HdCinematicOrientation
+ import me.magnum.melonds.domain.model.rom.config.RuntimeConsoleType
+ import me.magnum.melonds.domain.model.rom.config.LaunchDisplayProfile
+ import me.magnum.melonds.domain.model.rom.config.RuntimeMicSource
+@@ -13,4 +14,5 @@ data class RomConfigUiModel(
+     val gbaSlotConfig: RomGbaSlotConfigUiModel = RomGbaSlotConfigUiModel(),
+     val customName: String? = null,
+     val launchDisplayProfile: LaunchDisplayProfile = LaunchDisplayProfile.AUTOMATIC,
++    val hdCinematicOrientation: HdCinematicOrientation = HdCinematicOrientation.AUTOMATIC,
+ )
+diff --git a/app/src/main/java/me/magnum/melonds/ui/romdetails/model/RomConfigUpdateEvent.kt b/app/src/main/java/me/magnum/melonds/ui/romdetails/model/RomConfigUpdateEvent.kt
+index ea66ace7..824c2311 100644
+--- a/app/src/main/java/me/magnum/melonds/ui/romdetails/model/RomConfigUpdateEvent.kt
++++ b/app/src/main/java/me/magnum/melonds/ui/romdetails/model/RomConfigUpdateEvent.kt
+@@ -1,5 +1,6 @@
+ package me.magnum.melonds.ui.romdetails.model
+ 
++import me.magnum.melonds.domain.model.rom.config.HdCinematicOrientation
+ import android.net.Uri
+ import me.magnum.melonds.domain.model.rom.config.RuntimeConsoleType
+ import me.magnum.melonds.domain.model.rom.config.LaunchDisplayProfile
+@@ -14,5 +15,6 @@ sealed class RomConfigUpdateEvent {
+     data class GbaRomPathUpdate(val gbaRomPath: Uri?) : RomConfigUpdateEvent()
+     data class GbaSavePathUpdate(val gbaSavePath: Uri?) : RomConfigUpdateEvent()
+     data class CustomNameUpdate(val customName: String?) : RomConfigUpdateEvent()
++    data class HdCinematicOrientationUpdate(val orientation: HdCinematicOrientation) : RomConfigUpdateEvent()
+     data class LaunchDisplayProfileUpdate(val profile: LaunchDisplayProfile) : RomConfigUpdateEvent()
+ }
+diff --git a/app/src/main/java/me/magnum/melonds/ui/romdetails/ui/RomConfigUi.kt b/app/src/main/java/me/magnum/melonds/ui/romdetails/ui/RomConfigUi.kt
+index d440716a..56ed11d4 100644
+--- a/app/src/main/java/me/magnum/melonds/ui/romdetails/ui/RomConfigUi.kt
++++ b/app/src/main/java/me/magnum/melonds/ui/romdetails/ui/RomConfigUi.kt
+@@ -35,6 +35,11 @@ import me.magnum.melonds.domain.model.rom.Rom
+ import me.magnum.melonds.domain.model.RomInfo
+ import me.magnum.melonds.domain.model.rom.config.RomConfig
+ import me.magnum.melonds.domain.model.rom.config.LaunchDisplayProfile
++import me.magnum.melonds.domain.model.rom.config.HdCinematicOrientation
++import me.magnum.melonds.common.KhAssetsFolderManager
++import android.os.Environment
++import androidx.preference.PreferenceManager
++import java.io.File
+ import me.magnum.melonds.ui.common.MelonPreviewSet
+ import me.magnum.melonds.ui.common.component.dialog.TextInputDialog
+ import me.magnum.melonds.ui.common.component.dialog.rememberTextInputDialogState
+@@ -126,6 +131,35 @@ private fun Content(
+             modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 8.dp),
+         )
+ 
++        val prefs = PreferenceManager.getDefaultSharedPreferences(context)
++        val assetsRoot = File(
++            prefs.getString(KhAssetsFolderManager.PREF_CUSTOM_ROOT, null)
++                ?.takeIf { it.isNotBlank() }
++                ?: File(Environment.getExternalStorageDirectory(), "MelonMix").absolutePath,
++            "assets",
++        )
++        val khFolder = if (romInfo?.gameCode?.startsWith("YKG") == true) "days" else "recoded"
++        val cinematicDirectory = File(assetsRoot, "$khFolder/cutscenes/cinematics")
++        val hasHdVideos = isKhGame && cinematicDirectory.listFiles()?.any {
++            it.isFile && it.extension.equals("mp4", ignoreCase = true)
++        } == true
++        val cinematicModes = HdCinematicOrientation.entries
++        SingleChoiceItem(
++            name = "HD Cinematic Orientation",
++            value = romConfig.hdCinematicOrientation.name.lowercase().replaceFirstChar { it.uppercase() },
++            items = listOf("Automatic", "Landscape", "Portrait"),
++            selectedItemIndex = cinematicModes.indexOf(romConfig.hdCinematicOrientation),
++            enabled = hasHdVideos,
++            onItemSelected = { onConfigUpdate(RomConfigUpdateEvent.HdCinematicOrientationUpdate(cinematicModes[it])) },
++        )
++        if (isKhGame && !hasHdVideos) {
++            androidx.compose.material.Text(
++                text = "Install HD cinematic assets to enable this setting.",
++                style = MaterialTheme.typography.caption,
++                modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 8.dp),
++            )
++        }
++
+         val renameDialogState = rememberTextInputDialogState()
+         ActionLauncherItem(
+             name = stringResource(id = R.string.label_rom_config_custom_name),
+diff --git a/app/src/main/java/me/magnum/melonds/ui/romlist/RomListActivity.kt b/app/src/main/java/me/magnum/melonds/ui/romlist/RomListActivity.kt
+index cd960ec0..248b274c 100644
+--- a/app/src/main/java/me/magnum/melonds/ui/romlist/RomListActivity.kt
++++ b/app/src/main/java/me/magnum/melonds/ui/romlist/RomListActivity.kt
+@@ -35,6 +35,7 @@ import kotlinx.coroutines.flow.collectLatest
+ import kotlinx.coroutines.launch
+ import me.magnum.melonds.R
+ import me.magnum.melonds.common.KhAssetsFolderManager
++import me.magnum.melonds.common.romprocessors.RomFileProcessorFactory
+ import me.magnum.melonds.domain.model.ConsoleType
+ import me.magnum.melonds.domain.model.DownloadProgress
+ import me.magnum.melonds.domain.model.RomScanningStatus
+@@ -46,12 +47,14 @@ import me.magnum.melonds.parcelables.RomParcelable
+ import me.magnum.melonds.ui.common.melonTextButtonColors
+ import me.magnum.melonds.ui.common.rom.EmulatorLaunchValidatorDelegate
+ import me.magnum.melonds.ui.emulator.EmulatorActivity
++import me.magnum.melonds.ui.emulator.KhMenuSoundPlayer
+ import me.magnum.melonds.ui.romdetails.RomDetailsActivity
+ import me.magnum.melonds.ui.romlist.ui.DownloadProgressDialog
+ import me.magnum.melonds.ui.romlist.ui.NightlyUpdateDialog
+ import me.magnum.melonds.ui.romlist.ui.ProdUpdateAvailableDialog
+ import me.magnum.melonds.ui.romlist.ui.RomListScreen
+ import me.magnum.melonds.ui.romlist.ui.RemixGuideUi
++import me.magnum.melonds.ui.romlist.ui.RemixSetupUi
+ import me.magnum.melonds.ui.settings.SettingsActivity
+ import me.magnum.melonds.ui.theme.MelonTheme
+ import javax.inject.Inject
+@@ -72,6 +75,7 @@ class RomListActivity : AppCompatActivity() {
+ 
+     @Inject lateinit var khAssetsFolderManager: KhAssetsFolderManager
+     @Inject lateinit var khCheatDatabaseSeeder: KhCheatDatabaseSeeder
++    @Inject lateinit var romFileProcessorFactory: RomFileProcessorFactory
+ 
+     private var khAssetsPrompt by mutableStateOf<KhAssetsPrompt?>(null)
+     private var isMigratingKhAssets by mutableStateOf(false)
+@@ -80,6 +84,19 @@ class RomListActivity : AppCompatActivity() {
+     private var showRemixGuide by mutableStateOf(false)
+     private var remixGuideIsFirstLaunch = false
+     private var remixGuideIsWhatsNew = false
++    private var remixSetupStep by mutableStateOf<Int?>(null)
++    private var frontendMenuSounds: KhMenuSoundPlayer? = null
++
++    private val setupRomFolderPicker = registerForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
++        if (uri != null) viewModel.addRomSearchDirectory(uri)
++    }
++    private val setupModFolderPicker = registerForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
++        if (uri != null) {
++            val path = khAssetsFolderManager.treeUriToPath(uri)
++            if (path == null) Toast.makeText(this, R.string.kh_assets_invalid_folder, Toast.LENGTH_LONG).show()
++            else khAssetsFolderManager.setCustomMelonMixRoot(path)
++        }
++    }
+ 
+     // The all-files-access settings screen reports nothing back; re-check on return.
+     private val allFilesAccessLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+@@ -115,7 +132,7 @@ class RomListActivity : AppCompatActivity() {
+         }
+ 
+         // [KHMM]
+-        if (savedInstanceState == null && !khAssetsFolderManager.isSetupPromptHandled()) {
++        if (savedInstanceState == null && !remixGuideIsFirstLaunch && !khAssetsFolderManager.isSetupPromptHandled()) {
+             khAssetsPrompt = when {
+                 khAssetsFolderManager.needsMigration() -> KhAssetsPrompt.Migrate
+                 !khAssetsFolderManager.hasStorageAccess() -> KhAssetsPrompt.Fresh
+@@ -125,6 +142,14 @@ class RomListActivity : AppCompatActivity() {
+ 
+         val emulatorLauncherValidatorDelegate = EmulatorLaunchValidatorDelegate(this, object : EmulatorLaunchValidatorDelegate.Callback {
+             override fun onRomValidated(rom: Rom) {
++                val gameCode = romFileProcessorFactory.getFileRomProcessorForDocument(rom.uri)
++                    ?.getRomInfo(rom)?.gameCode
++                if (gameCode !in setOf("YKGP", "YKGJ", "YKGE", "BK9P", "BK9J", "BK9E")) {
++                    Toast.makeText(this@RomListActivity,
++                        "This game isn't supported by Saltlord’s Remix. Play 358/2 Days or Re:Coded instead.",
++                        Toast.LENGTH_LONG).show()
++                    return
++                }
+                 val intent = EmulatorActivity.getRomEmulatorActivityIntent(this@RomListActivity, rom)
+                 startActivity(intent)
+             }
+@@ -201,14 +226,26 @@ class RomListActivity : AppCompatActivity() {
+                     onRefresh = viewModel::refreshRoms,
+                     onDirectorySelected = viewModel::addRomSearchDirectory,
+                     onNavigateToSettings = {
++                        playFrontendMenuSound()
+                         val intent = Intent(this@RomListActivity, SettingsActivity::class.java)
+                         startActivity(intent)
+                     },
+                     onOpenRemixGuide = {
++                        playFrontendMenuSound()
+                         remixGuideIsFirstLaunch = false
+                         remixGuideIsWhatsNew = false
+                         showRemixGuide = true
+                     },
++                    onOpenRemixSetup = {
++                        playFrontendMenuSound()
++                        remixSetupStep = 0
++                    },
++                    onOpenRemixWhatsNew = {
++                        playFrontendMenuSound()
++                        remixGuideIsFirstLaunch = false
++                        remixGuideIsWhatsNew = true
++                        showRemixGuide = true
++                    },
+                     retrieveRomIcon = { rom ->
+                         viewModel.getRomIcon(rom)
+                     },
+@@ -335,21 +372,96 @@ class RomListActivity : AppCompatActivity() {
+                         firstLaunch = remixGuideIsFirstLaunch,
+                         whatsNew = remixGuideIsWhatsNew,
+                         onDismiss = {
+-                            getSharedPreferences(REMIX_PREFERENCES, MODE_PRIVATE)
+-                                .edit()
+-                                .putBoolean(KEY_REMIX_GUIDE_COMPLETED, true)
+-                                .putString(KEY_REMIX_WHATS_NEW_SHOWN, REMIX_WHATS_NEW_REVISION)
+-                                .apply()
+-                            showRemixGuide = false
+-                            remixGuideIsFirstLaunch = false
+-                            remixGuideIsWhatsNew = false
++                            closeRemixGuide()
++                        },
++                        onStartSetup = {
++                            playFrontendMenuSound()
++                            closeRemixGuide()
++                            remixSetupStep = 0
+                         },
+                     )
+                 }
++                remixSetupStep?.let { step ->
++                    RemixSetupUi(
++                        step = step,
++                        onNext = { playFrontendMenuSound(); remixSetupStep = (step + 1).takeIf { it < 8 } },
++                        onSkip = { playFrontendMenuSound(); remixSetupStep = null },
++                        onRequestFileAccess = ::requestStorageAccess,
++                        onChooseRomFolder = { setupRomFolderPicker.launch(null) },
++                        onChooseModFolder = { setupModFolderPicker.launch(null) },
++                        onChooseDisplay = ::chooseInitialDisplayProfile,
++                        onChooseGraphics = ::chooseGraphicsPreset,
++                        onChooseMenuSounds = ::chooseFrontendMenuSounds,
++                    )
++                }
+             }
+         }
+     }
+ 
++    private fun closeRemixGuide() {
++        getSharedPreferences(REMIX_PREFERENCES, MODE_PRIVATE).edit()
++            .putBoolean(KEY_REMIX_GUIDE_COMPLETED, true)
++            .putString(KEY_REMIX_WHATS_NEW_SHOWN, REMIX_WHATS_NEW_REVISION)
++            .apply()
++        showRemixGuide = false
++        remixGuideIsFirstLaunch = false
++        remixGuideIsWhatsNew = false
++        khAssetsFolderManager.setSetupPromptHandled()
++    }
++
++    private fun playFrontendMenuSound() {
++        if (androidx.preference.PreferenceManager.getDefaultSharedPreferences(this)
++                .getBoolean("kh_frontend_menu_sounds", true)) {
++            val player = frontendMenuSounds ?: KhMenuSoundPlayer(this).also { frontendMenuSounds = it }
++            player.play(KhMenuSoundPlayer.SOUND_ENTER)
++        }
++    }
++
++    override fun onDestroy() {
++        frontendMenuSounds?.release()
++        super.onDestroy()
++    }
++
++    private fun chooseInitialDisplayProfile() {
++        val labels = arrayOf("Automatic", "Portrait · 4:3", "Landscape · 4:3", "Landscape · Fullscreen")
++        val profiles = arrayOf("AUTOMATIC", "PORTRAIT_4_3", "LANDSCAPE_4_3", "LANDSCAPE_WIDESCREEN")
++        androidx.appcompat.app.AlertDialog.Builder(this)
++            .setTitle("Initial display profile")
++            .setItems(labels) { _, selected ->
++                androidx.preference.PreferenceManager.getDefaultSharedPreferences(this)
++                    .edit().putString("kh_initial_display_profile", profiles[selected]).apply()
++            }.show()
++    }
++
++    private fun chooseFrontendMenuSounds() {
++        val prefs = androidx.preference.PreferenceManager.getDefaultSharedPreferences(this)
++        val labels = arrayOf("On", "Off")
++        androidx.appcompat.app.AlertDialog.Builder(this)
++            .setTitle("Kingdom Hearts menu sounds")
++            .setSingleChoiceItems(labels, if (prefs.getBoolean("kh_frontend_menu_sounds", true)) 0 else 1) { dialog, selected ->
++                prefs.edit().putBoolean("kh_frontend_menu_sounds", selected == 0).apply()
++                dialog.dismiss()
++            }.show()
++    }
++
++    private fun chooseGraphicsPreset() {
++        val labels = arrayOf("Low-Spec · 1x", "Balanced · 2x", "High-Spec · 4x", "Custom · keep current settings")
++        androidx.appcompat.app.AlertDialog.Builder(this)
++            .setTitle("Graphics preset")
++            .setItems(labels) { _, selected ->
++                if (selected == 3) return@setItems
++                androidx.preference.PreferenceManager.getDefaultSharedPreferences(this).edit()
++                    .putString("video_internal_resolution", listOf("1", "2", "4")[selected])
++                    .putBoolean("enable_enhanced_graphics", true)
++                    .putBoolean("kh_single_screen_mode", true)
++                    .putInt("kh_portrait_screen_position", 15)
++                    .putBoolean("kh_show_subtitles", true)
++                    .putString("video_filtering", if (selected == 0) "none" else "linear")
++                    .putString("fps_counter_position", "hidden")
++                    .apply()
++            }.show()
++    }
++
+     private fun shouldShowRemixGuideOnLaunch(): Boolean {
+         val preferences = getSharedPreferences(REMIX_PREFERENCES, MODE_PRIVATE)
+         if (preferences.contains(KEY_REMIX_GUIDE_COMPLETED)) {
+diff --git a/app/src/main/java/me/magnum/melonds/ui/romlist/ui/RemixGuideUi.kt b/app/src/main/java/me/magnum/melonds/ui/romlist/ui/RemixGuideUi.kt
+index af00cf34..432f4c2f 100644
+--- a/app/src/main/java/me/magnum/melonds/ui/romlist/ui/RemixGuideUi.kt
++++ b/app/src/main/java/me/magnum/melonds/ui/romlist/ui/RemixGuideUi.kt
+@@ -1,5 +1,6 @@
+ package me.magnum.melonds.ui.romlist.ui
+ 
++import androidx.compose.foundation.Image
+ import androidx.compose.foundation.layout.Arrangement
+ import androidx.compose.foundation.layout.Column
+ import androidx.compose.foundation.layout.Row
+@@ -20,15 +21,18 @@ import androidx.compose.material.Text
+ import androidx.compose.material.TextButton
+ import androidx.compose.runtime.Composable
+ import androidx.compose.ui.Modifier
++import androidx.compose.ui.layout.ContentScale
++import androidx.compose.ui.res.painterResource
+ import androidx.compose.ui.text.font.FontWeight
+ import androidx.compose.ui.unit.dp
+ import androidx.compose.ui.unit.sp
+ import androidx.compose.ui.window.Dialog
+ import androidx.compose.ui.window.DialogProperties
+ import me.magnum.melonds.BuildConfig
++import me.magnum.melonds.R
+ 
+ @Composable
+-fun RemixGuideUi(firstLaunch: Boolean, whatsNew: Boolean = false, onDismiss: () -> Unit) {
++fun RemixGuideUi(firstLaunch: Boolean, whatsNew: Boolean = false, onDismiss: () -> Unit, onStartSetup: () -> Unit = onDismiss) {
+     Dialog(
+         onDismissRequest = { if (!firstLaunch) onDismiss() },
+         properties = DialogProperties(usePlatformDefaultWidth = false),
+@@ -40,6 +44,14 @@ fun RemixGuideUi(firstLaunch: Boolean, whatsNew: Boolean = false, onDismiss: ()
+                         .padding(horizontal = 24.dp, vertical = 28.dp),
+                     verticalArrangement = Arrangement.spacedBy(16.dp),
+                 ) {
++                    if (!whatsNew) {
++                        Image(
++                            painter = painterResource(R.drawable.kh_remix_final_logo),
++                            contentDescription = "Saltlord’s Remix logo",
++                            contentScale = ContentScale.Fit,
++                            modifier = Modifier.fillMaxWidth().height(130.dp),
++                        )
++                    }
+                     Text(
+                         if (whatsNew) "What’s new in Saltlord’s Remix" else "Melon Mix: Saltlord’s Remix",
+                         style = MaterialTheme.typography.h5,
+@@ -47,8 +59,8 @@ fun RemixGuideUi(firstLaunch: Boolean, whatsNew: Boolean = false, onDismiss: ()
+                     )
+                     if (whatsNew) {
+                         GuideSection("Cinematic & launcher polish", listOf(
+-                            "Choose regular or reverse landscape for HD cinematics",
+-                            "Place and resize the cinematic Rotate control in the layout editor",
++                            "HD cinematics follow the device in either landscape direction",
++                            "Choose Automatic, Landscape or Portrait independently for each game when HD video assets are present",
+                             "A refreshed launcher-icon identity that prompts Android launchers to reload the Remix artwork",
+                             "Preloaded per-game cheats for all six regional releases of 358/2 Days and Re:coded",
+                             "The upstream MelonMix updater is disabled until Remix has its own safe release feed",
+@@ -58,6 +70,12 @@ fun RemixGuideUi(firstLaunch: Boolean, whatsNew: Boolean = false, onDismiss: ()
+                         "A human-directed, Android-focused fork built to make the Kingdom Hearts Nintendo DS games feel at home on modern touch devices.",
+                         style = MaterialTheme.typography.body1,
+                     )
++                    if (firstLaunch) {
++                        GuideSection("Built for the Kingdom Hearts DS games", listOf(
++                            "Play Kingdom Hearts 358/2 Days and Kingdom Hearts Re:Coded.",
++                            "US versions work best with KH Melon Mix enhancements. EU and JP versions may have limited enhancements or visual glitches.",
++                        ))
++                    }
+                     GuideSection("What’s different in Remix?", listOf(
+                         "A dedicated, editable KH touchscreen preset",
+                         "Relative movement and camera controls designed for touch",
+@@ -67,7 +85,7 @@ fun RemixGuideUi(firstLaunch: Boolean, whatsNew: Boolean = false, onDismiss: ()
+                         "Per-control positioning, sizing and opacity with grid snapping",
+                         "Portrait 4:3, landscape 4:3 and fullscreen landscape launch profiles",
+                         "Foldable-aware layouts and custom viewport positioning",
+-                        "HD cinematics with optional landscape preference, manual rotation and gameplay-orientation restoration",
++                        "Per-game HD cinematic orientation with gameplay-orientation restoration",
+                         "A preloaded, individually toggleable Kingdom Hearts cheat collection",
+                         "Saltlord’s Remix launcher icon and red, black and warm-gold visual identity",
+                     ))
+@@ -100,10 +118,11 @@ fun RemixGuideUi(firstLaunch: Boolean, whatsNew: Boolean = false, onDismiss: ()
+                     horizontalArrangement = Arrangement.End,
+                 ) {
+                     if (firstLaunch) {
++                        TextButton(onClick = onDismiss) { Text("Skip setup") }
+                         Button(
+-                            onClick = onDismiss,
++                            onClick = onStartSetup,
+                             colors = ButtonDefaults.buttonColors(backgroundColor = MaterialTheme.colors.secondary),
+-                        ) { Text("Get started", fontSize = 16.sp) }
++                        ) { Text("Let’s get started", fontSize = 16.sp) }
+                     } else {
+                         TextButton(onClick = onDismiss) { Text("Close") }
+                     }
+diff --git a/app/src/main/java/me/magnum/melonds/ui/romlist/ui/RemixSetupUi.kt b/app/src/main/java/me/magnum/melonds/ui/romlist/ui/RemixSetupUi.kt
+index 77687b6b..7bb6fa5e 100644
+--- a/app/src/main/java/me/magnum/melonds/ui/romlist/ui/RemixSetupUi.kt
++++ b/app/src/main/java/me/magnum/melonds/ui/romlist/ui/RemixSetupUi.kt
+@@ -35,17 +35,21 @@ fun RemixSetupUi(
+     onChooseModFolder: () -> Unit,
+     onChooseDisplay: () -> Unit,
+     onChooseGraphics: () -> Unit,
++    onChooseMenuSounds: () -> Unit,
+ ) {
+-    val titles = listOf("File access", "Your Kingdom Hearts games", "Optional Remix assets", "Display layout", "Graphics")
++    val titles = listOf("Welcome to Saltlord’s Remix", "File access", "Your Kingdom Hearts games", "Optional Remix assets", "Display layout", "Graphics", "Kingdom Hearts menu sounds", "Ready to play")
+     val descriptions = listOf(
++        "A touchscreen-focused Android fork for Kingdom Hearts 358/2 Days and Re:Coded. Let’s set up your games and optional assets; you can skip or revisit this guide at any time.",
+         "You’ll choose your ROM folder separately. HD videos and mods use MelonMix’s native assets folder, which requires Android’s all-files access on recent devices. Android will ask only when you press Grant file access.",
+-        "Choose a ROM folder. The library recognises 358/2 Days and Re:Coded across US, EU and JP releases. You can do this later if your games are not ready yet.",
++        "Choose a ROM folder. The library recognises 358/2 Days and Re:Coded across US, EU and JP releases. US dumps are recommended for the broadest Remix asset compatibility. You can do this later.",
+         "Choose the MelonMix folder containing your optional assets/ subfolder. HD cinematics and remastered music work when their packs are present. You can skip this step.",
+         "Choose how newly added games start. You can still set a different display profile for each game later.",
+         "Choose Low-Spec, Balanced, High-Spec or Custom. Every graphics setting remains editable later.",
++        "Optional frontend selection sounds play for major navigation only. Game audio is controlled separately.",
++        "Your setup is complete. You can reopen this wizard from the home screen menu whenever you like.",
+     )
+-    val actions = listOf("Grant file access", "Choose ROM folder", "Choose mod folder", "Choose display layout", "Choose graphics preset")
+-    val callbacks = listOf(onRequestFileAccess, onChooseRomFolder, onChooseModFolder, onChooseDisplay, onChooseGraphics)
++    val actions = listOf("Begin", "Grant file access", "Choose ROM folder", "Choose mod folder", "Choose display layout", "Choose graphics preset", "Choose menu sounds", "Finish")
++    val callbacks = listOf(onNext, onRequestFileAccess, onChooseRomFolder, onChooseModFolder, onChooseDisplay, onChooseGraphics, onChooseMenuSounds, onSkip)
+     Dialog(onDismissRequest = {}, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+         Surface(color = MaterialTheme.colors.background, modifier = Modifier.fillMaxSize()) {
+             Column(modifier = Modifier.fillMaxSize().padding(24.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+@@ -55,14 +59,14 @@ fun RemixSetupUi(
+                     contentScale = ContentScale.Fit,
+                     modifier = Modifier.fillMaxWidth().height(120.dp).sizeIn(maxWidth = 360.dp),
+                 )
+-                Text("Setup ${step + 1} of 5", style = MaterialTheme.typography.caption)
++                Text("Setup ${step + 1} of ${titles.size}", style = MaterialTheme.typography.caption)
+                 Text(titles[step], style = MaterialTheme.typography.h5)
+                 Text(descriptions[step], style = MaterialTheme.typography.body1)
+                 Button(onClick = callbacks[step]) { Text(actions[step]) }
+                 Spacer(Modifier.weight(1f))
+                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                     TextButton(onClick = onSkip) { Text("Skip setup") }
+-                    Button(onClick = onNext) { Text(if (step == 4) "Finish" else "Continue") }
++                    Button(onClick = onNext) { Text(if (step == titles.lastIndex) "Finish" else "Continue") }
+                 }
+             }
+         }
+diff --git a/app/src/main/java/me/magnum/melonds/ui/romlist/ui/RomListScreen.kt b/app/src/main/java/me/magnum/melonds/ui/romlist/ui/RomListScreen.kt
+index b8366ba2..e5d72dc6 100644
+--- a/app/src/main/java/me/magnum/melonds/ui/romlist/ui/RomListScreen.kt
++++ b/app/src/main/java/me/magnum/melonds/ui/romlist/ui/RomListScreen.kt
+@@ -4,8 +4,10 @@ import android.net.Uri
+ import android.view.KeyEvent
+ import androidx.activity.compose.BackHandler
+ import androidx.compose.foundation.background
++import androidx.compose.foundation.Image
+ import androidx.compose.foundation.focusable
+ import androidx.compose.foundation.layout.Box
++import androidx.compose.foundation.layout.BoxWithConstraints
+ import androidx.compose.foundation.layout.Column
+ import androidx.compose.foundation.layout.Row
+ import androidx.compose.foundation.layout.WindowInsets
+@@ -15,6 +17,7 @@ import androidx.compose.foundation.layout.fillMaxSize
+ import androidx.compose.foundation.layout.fillMaxWidth
+ import androidx.compose.foundation.layout.only
+ import androidx.compose.foundation.layout.padding
++import androidx.compose.foundation.layout.sizeIn
+ import androidx.compose.foundation.layout.safeDrawing
+ import androidx.compose.foundation.layout.statusBarsPadding
+ import androidx.compose.foundation.text.KeyboardActions
+@@ -48,6 +51,8 @@ import androidx.compose.runtime.remember
+ import androidx.compose.runtime.saveable.rememberSaveable
+ import androidx.compose.runtime.setValue
+ import androidx.compose.ui.Modifier
++import androidx.compose.ui.Alignment
++import androidx.compose.ui.layout.ContentScale
+ import androidx.compose.ui.focus.FocusRequester
+ import androidx.compose.ui.focus.focusRequester
+ import androidx.compose.ui.focus.onFocusChanged
+@@ -83,6 +88,8 @@ fun RomListScreen(
+     onDirectorySelected: (Uri) -> Unit,
+     onNavigateToSettings: () -> Unit,
+     onOpenRemixGuide: () -> Unit,
++    onOpenRemixSetup: () -> Unit,
++    onOpenRemixWhatsNew: () -> Unit,
+     retrieveRomIcon: suspend (Rom) -> RomIcon,
+ ) {
+     var isSearchActive by rememberSaveable { mutableStateOf(false) }
+@@ -92,6 +99,10 @@ fun RomListScreen(
+     // [KHMM] KH game-select screen: cursor/confirm SFX on the game rows
+     val context = LocalContext.current
+     val khMenuSounds = remember { KhMenuSoundPlayer(context) }
++    val frontendSoundsEnabled = {
++        androidx.preference.PreferenceManager.getDefaultSharedPreferences(context)
++            .getBoolean("kh_frontend_menu_sounds", true)
++    }
+     DisposableEffect(Unit) {
+         onDispose { khMenuSounds.release() }
+     }
+@@ -138,6 +149,8 @@ fun RomListScreen(
+                         onRefresh = onRefresh,
+                         onNavigateToSettings = onNavigateToSettings,
+                         onOpenRemixGuide = onOpenRemixGuide,
++                        onOpenRemixSetup = onOpenRemixSetup,
++                        onOpenRemixWhatsNew = onOpenRemixWhatsNew,
+                     )
+                 }
+             }
+@@ -146,27 +159,40 @@ fun RomListScreen(
+         contentWindowInsets = WindowInsets.safeDrawing,
+     ) { padding ->
+         if (hasSearchDirectories) {
+-            RomList(
+-                modifier = Modifier.fillMaxSize(),
+-                roms = roms,
+-                isRefreshing = isRefreshing,
+-                onRefresh = onRefresh,
+-                contentPadding = padding,
+-            ) { modifier, rom ->
+-                KhGameSelectItem(
+-                    modifier = modifier.fillMaxWidth(),
+-                    rom = rom,
+-                    onClick = {
+-                        khMenuSounds.play(KhMenuSoundPlayer.SOUND_SELECT)
+-                        onRomSelected(rom)
+-                    },
+-                    onConfigClick = {
+-                        khMenuSounds.play(KhMenuSoundPlayer.SOUND_ENTER)
+-                        onRomConfigClick(rom)
+-                    },
+-                    onCursorMove = { khMenuSounds.play(KhMenuSoundPlayer.SOUND_MOVE) },
+-                    retrieveTitleIcon = { retrieveRomIcon(rom) },
+-                )
++            BoxWithConstraints(Modifier.fillMaxSize()) {
++                RomList(
++                    modifier = Modifier.fillMaxSize(),
++                    roms = roms,
++                    isRefreshing = isRefreshing,
++                    onRefresh = onRefresh,
++                    contentPadding = padding,
++                ) { modifier, rom ->
++                    KhGameSelectItem(
++                        modifier = modifier.fillMaxWidth(),
++                        rom = rom,
++                        onClick = {
++                        if (frontendSoundsEnabled()) khMenuSounds.play(KhMenuSoundPlayer.SOUND_SELECT)
++                            onRomSelected(rom)
++                        },
++                        onConfigClick = {
++                        if (frontendSoundsEnabled()) khMenuSounds.play(KhMenuSoundPlayer.SOUND_ENTER)
++                            onRomConfigClick(rom)
++                        },
++                        onCursorMove = { /* Selection feedback is reserved for opening major screens. */ },
++                        retrieveTitleIcon = { retrieveRomIcon(rom) },
++                    )
++                }
++                // The library occupies this space first. Decoration disappears as
++                // soon as the list could reach it, including on short cover screens.
++                if (roms != null && maxHeight > (roms.size * 100 + 340).dp) {
++                    Image(
++                        painter = painterResource(R.drawable.kh_remix_final_logo),
++                        contentDescription = null,
++                        contentScale = ContentScale.Fit,
++                        modifier = Modifier.align(Alignment.BottomCenter)
++                            .padding(bottom = 24.dp).sizeIn(maxWidth = 320.dp, maxHeight = 160.dp),
++                    )
++                }
+             }
+         } else {
+             NoSearchDirectoriesContent(
+@@ -186,6 +212,8 @@ private fun RomListTopBar(
+     onRefresh: () -> Unit,
+     onNavigateToSettings: () -> Unit,
+     onOpenRemixGuide: () -> Unit,
++    onOpenRemixSetup: () -> Unit,
++    onOpenRemixWhatsNew: () -> Unit,
+ ) {
+     var showSortMenu by remember { mutableStateOf(false) }
+ 
+@@ -316,6 +344,14 @@ private fun RomListTopBar(
+                             }) {
+                                 Text(stringResource(R.string.remix_guide))
+                             }
++                            DropdownMenuItem(onClick = {
++                                onOverflowMenuChange(false)
++                                onOpenRemixSetup()
++                            }) { Text("Setup Wizard") }
++                            DropdownMenuItem(onClick = {
++                                onOverflowMenuChange(false)
++                                onOpenRemixWhatsNew()
++                            }) { Text("What's New") }
+                             DropdownMenuItem(onClick = {
+                                 onOverflowMenuChange(false)
+                                 onNavigateToSettings()
+diff --git a/app/src/main/java/me/magnum/melonds/ui/theme/Colors.kt b/app/src/main/java/me/magnum/melonds/ui/theme/Colors.kt
+index 2f3e7ef5..f04ead32 100644
+--- a/app/src/main/java/me/magnum/melonds/ui/theme/Colors.kt
++++ b/app/src/main/java/me/magnum/melonds/ui/theme/Colors.kt
+@@ -17,8 +17,8 @@ val LightMelonColors @Composable get() = lightColors(
+     primaryVariant = Color(0xFF260A0D),
+     secondary = Color(0xFFC9A036),        // R.color.colorAccent
+     secondaryVariant = Color(0xFFC9A036), // R.color.colorAccent
+-    background = Color(0xFFF7F3F1),
+-    surface = Color(0xFFFFFFFF),
++    background = Color(0xFFF4E9D2),
++    surface = Color(0xFFF4E9D2),
+     onPrimary = Color(0xFFFFFFFF),        // R.color.colorOnPrimary
+     onSecondary = Color(0xFF231B06),      // dark text on the gold accent
+     onSurface = Color(0xFF222222),        // R.color.textColorPrimary
+diff --git a/app/src/main/res/values/colors.xml b/app/src/main/res/values/colors.xml
+index cf4979f0..28bb234e 100644
+--- a/app/src/main/res/values/colors.xml
++++ b/app/src/main/res/values/colors.xml
+@@ -8,8 +8,8 @@
+     <color name="colorAccent">@color/melonMain</color>
+     <color name="colorOnPrimary">#fff</color>
+     <color name="colorOnSecondary">#fff</color>
+-    <color name="colorSurface">#FFFFFF</color>
+-    <color name="colorBackground">#F7F3F1</color>
++    <color name="colorSurface">#F4E9D2</color>
++    <color name="colorBackground">#F4E9D2</color>
+ 
+     <color name="textColorPrimary">#DD000000</color>
+     <color name="textColorSecondary">#89000000</color>
+diff --git a/app/src/main/res/values/strings.xml b/app/src/main/res/values/strings.xml
+index cd9cca84..21a616ab 100644
+--- a/app/src/main/res/values/strings.xml
++++ b/app/src/main/res/values/strings.xml
+@@ -245,9 +245,6 @@
+     <string name="kh_portrait_screen_position_summary">Position within the safe vertical space: 0% is highest, 20% is handheld style, and 50% is centred.</string>
+     <string name="kh_show_subtitles">Cutscene subtitles (KH Melon Mix)</string>
+     <string name="kh_show_subtitles_summary">Display subtitles during HD cutscene playback, when available. The language follows the Game language setting.</string>
+-    <string name="kh_prefer_landscape_cinematics">Prefer landscape HD cinematics</string>
+-    <string name="kh_prefer_landscape_cinematics_summary">Temporarily rotate HD cinematics to landscape, then restore the exact gameplay orientation when playback ends. The Rotate button can still change an individual cinematic.</string>
+-    <string name="kh_rotate_cinematic">Rotate cinematic</string>
+     <string name="kh_cinematic_landscape_direction">Cinematic landscape direction</string>
+     <string name="input_kh_cinematic_rotate">Cinematic Rotate</string>
+     <string name="kh_bgm_category">Remastered music (KH Melon Mix)</string>
+diff --git a/app/src/main/res/xml/pref_audio.xml b/app/src/main/res/xml/pref_audio.xml
+index 50040841..9c1aeffb 100644
+--- a/app/src/main/res/xml/pref_audio.xml
++++ b/app/src/main/res/xml/pref_audio.xml
+@@ -3,6 +3,13 @@
+         xmlns:android="http://schemas.android.com/apk/res/android"
+         xmlns:app="http://schemas.android.com/apk/res-auto">
+ 
++    <SwitchPreference
++            android:key="kh_frontend_menu_sounds"
++            android:title="Kingdom Hearts menu sounds"
++            android:summary="Play Kingdom Hearts-style sounds when navigating major Remix menus."
++            app:iconSpaceReserved="false"
++            android:defaultValue="true" />
++
+     <SwitchPreference
+             android:key="sound_enabled"
+             android:title="@string/enable_sound"
+@@ -83,4 +90,4 @@
+                 android:max="100"
+                 app:showSeekBarValue="true" />
+     </PreferenceCategory>
+-</PreferenceScreen>
+\ No newline at end of file
++</PreferenceScreen>
+diff --git a/app/src/main/res/xml/pref_video.xml b/app/src/main/res/xml/pref_video.xml
+index c739a5ed..1bfd5917 100644
+--- a/app/src/main/res/xml/pref_video.xml
++++ b/app/src/main/res/xml/pref_video.xml
+@@ -64,13 +64,7 @@
+             app:iconSpaceReserved="false"
+             android:defaultValue="true" />
+ 
+-    <SwitchPreference
+-            android:key="kh_prefer_landscape_cinematics"
+-            android:title="@string/kh_prefer_landscape_cinematics"
+-            android:summary="@string/kh_prefer_landscape_cinematics_summary"
+-            android:dependency="enable_enhanced_graphics"
+-            app:iconSpaceReserved="false"
+-            android:defaultValue="true" />
++
+ 
+     <ListPreference
+             android:key="video_filtering"
