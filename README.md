@@ -1,3 +1,18 @@
+<p align="center">
+  <img src="assets/saltlords-remix-logo.png"
+       alt="Melon Mix: Saltlord's Remix"
+       width="700">
+</p>
+
+<p align="center">
+  A Kingdom Hearts-focused Android fork of Melon Mix, built for a modern way to play
+  <i>Kingdom Hearts 358/2 Days</i> and <i>Kingdom Hearts Re:Coded</i>.
+</p>
+
+---
+
+## About Saltlord's Remix
+
 # Melon Mix: Saltlord's Remix (Android)
 
 A personal passion project to create my ultimate way to play the Kingdom Hearts DS games on Android. 👑❤️
