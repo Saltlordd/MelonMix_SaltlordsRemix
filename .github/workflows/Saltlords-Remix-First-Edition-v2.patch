@@ -1,0 +1,3972 @@
+diff --git a/app/src/gitHub/res/xml/pref_general_updates.xml b/app/src/gitHub/res/xml/pref_general_updates.xml
+index 00cc464a..369341b6 100644
+--- a/app/src/gitHub/res/xml/pref_general_updates.xml
++++ b/app/src/gitHub/res/xml/pref_general_updates.xml
+@@ -6,7 +6,8 @@
+     <SwitchPreference
+         android:key="github_check_for_updates"
+         android:title="@string/check_for_updates"
+-        android:summary="@string/check_for_updates_summary"
++        android:summary="@string/remix_updates_unavailable"
+         app:iconSpaceReserved="false"
+-        android:defaultValue="true" />
+-</PreferenceScreen>
+\ No newline at end of file
++        android:defaultValue="false"
++        android:enabled="false" />
++</PreferenceScreen>
+diff --git a/app/src/main/java/me/magnum/melonds/database/daos/CheatDatabaseDao.kt b/app/src/main/java/me/magnum/melonds/database/daos/CheatDatabaseDao.kt
+index e3be1f77..99a80d7e 100644
+--- a/app/src/main/java/me/magnum/melonds/database/daos/CheatDatabaseDao.kt
++++ b/app/src/main/java/me/magnum/melonds/database/daos/CheatDatabaseDao.kt
+@@ -10,6 +10,9 @@ interface CheatDatabaseDao {
+     @Insert
+     suspend fun insertCheatDatabase(database: CheatDatabaseEntity): Long
+ 
+-    @Query("DELETE FROM cheat_database WHERE id <> ${CheatDatabaseEntity.CUSTOM_CHEATS_DATABASE_ID}")
++    @Query("SELECT * FROM cheat_database WHERE name = :name LIMIT 1")
++    suspend fun findCheatDatabaseByName(name: String): CheatDatabaseEntity?
++
++    @Query("DELETE FROM cheat_database WHERE id <> ${CheatDatabaseEntity.CUSTOM_CHEATS_DATABASE_ID} AND name <> '${CheatDatabaseEntity.KH_REMIX_CHEATS_DATABASE_NAME}'")
+     suspend fun deleteImportedCheatDatabases()
+-}
+\ No newline at end of file
++}
+diff --git a/app/src/main/java/me/magnum/melonds/database/entities/CheatDatabaseEntity.kt b/app/src/main/java/me/magnum/melonds/database/entities/CheatDatabaseEntity.kt
+index 39a40b58..e4eb4ed2 100644
+--- a/app/src/main/java/me/magnum/melonds/database/entities/CheatDatabaseEntity.kt
++++ b/app/src/main/java/me/magnum/melonds/database/entities/CheatDatabaseEntity.kt
+@@ -20,5 +20,6 @@ data class CheatDatabaseEntity(
+         // The ID of the database that holds cheats manually created by the user. Its 0 because SQLite starts autoincrement keys from 1
+         const val CUSTOM_CHEATS_DATABASE_ID = 0L
+         const val CUSTOM_CHEATS_DATABASE_NAME = "__custom_cheat_database"
++        const val KH_REMIX_CHEATS_DATABASE_NAME = "__saltlords_remix_kh_cheats"
+     }
+-}
+\ No newline at end of file
++}
+diff --git a/app/src/main/java/me/magnum/melonds/impl/InternalLayoutsRepository.kt b/app/src/main/java/me/magnum/melonds/impl/InternalLayoutsRepository.kt
+index 8133449d..e68cf063 100644
+--- a/app/src/main/java/me/magnum/melonds/impl/InternalLayoutsRepository.kt
++++ b/app/src/main/java/me/magnum/melonds/impl/InternalLayoutsRepository.kt
+@@ -36,6 +36,7 @@ class InternalLayoutsRepository(private val context: Context, private val gson:
+         private const val REMIX_LAYOUT_PREFERENCES = "saltlords_remix_layouts"
+         private const val KEY_COMPONENT_SCHEMA = "component_schema"
+         private const val COMPONENT_SCHEMA_HUD_TOGGLE = 1
++        private const val COMPONENT_SCHEMA_CINEMATIC_ROTATE = 2
+         private val layoutListType: Type = object : TypeToken<List<LayoutConfigurationDto>>(){}.type
+     }
+ 
+@@ -128,21 +129,31 @@ class InternalLayoutsRepository(private val context: Context, private val gson:
+                 val savedLayouts = loadLayouts()
+                 val remixPreferences = context.getSharedPreferences(REMIX_LAYOUT_PREFERENCES, Context.MODE_PRIVATE)
+                 val needsHudMigration = remixPreferences.getInt(KEY_COMPONENT_SCHEMA, 0) < COMPONENT_SCHEMA_HUD_TOGGLE
+-                val savedKhTouchRemix = savedLayouts.firstOrNull { it.id == LayoutConfiguration.KH_TOUCH_REMIX_ID }
+-                    ?.let { if (needsHudMigration) addHudToggleWithoutResettingLayout(it) else it }
++                val needsRotateMigration = remixPreferences.getInt(KEY_COMPONENT_SCHEMA, 0) < COMPONENT_SCHEMA_CINEMATIC_ROTATE
++                // Migrate every saved custom layout, not only the starter preset. Users often
++                // duplicate or rename that preset before editing it, and those layouts must gain
++                // newly introduced Remix controls without losing any existing customization.
++                val migratedSavedLayouts = savedLayouts.map { savedLayout ->
++                    savedLayout
++                        .let { if (needsHudMigration) addHudToggleWithoutResettingLayout(it) else it }
++                        .let { if (needsRotateMigration) addCinematicRotateWithoutResettingLayout(it) else it }
++                }
++                val savedKhTouchRemix = migratedSavedLayouts.firstOrNull {
++                    it.id == LayoutConfiguration.KH_TOUCH_REMIX_ID
++                }
+                 layouts.value = buildList {
+                     add(Deletable(buildDefaultLayout(), false))
+                     // [KH touch] Ship an editable starter preset. Once edited, the saved
+                     // version replaces this seed instead of creating a duplicate entry.
+                     add(Deletable(savedKhTouchRemix ?: buildKhTouchRemixLayout(), false))
+-                    addAll(savedLayouts.filterNot { it.id == LayoutConfiguration.KH_TOUCH_REMIX_ID }.map { Deletable(it, false) })
++                    addAll(migratedSavedLayouts.filterNot { it.id == LayoutConfiguration.KH_TOUCH_REMIX_ID }.map { Deletable(it, false) })
+                 }
+                 areLayoutsLoaded = true
+-                if (needsHudMigration) {
++                if (needsHudMigration || needsRotateMigration) {
+                     // Persist only the newly introduced control. Every existing coordinate,
+                     // size, alpha and visibility choice remains untouched.
+-                    if (savedKhTouchRemix != null) saveLayouts()
+-                    remixPreferences.edit().putInt(KEY_COMPONENT_SCHEMA, COMPONENT_SCHEMA_HUD_TOGGLE).apply()
++                    if (migratedSavedLayouts != savedLayouts) saveLayouts()
++                    remixPreferences.edit().putInt(KEY_COMPONENT_SCHEMA, COMPONENT_SCHEMA_CINEMATIC_ROTATE).apply()
+                 }
+             }
+         }
+@@ -242,4 +253,32 @@ class InternalLayoutsRepository(private val context: Context, private val gson:
+         )
+     }
+ 
++    private fun addCinematicRotateWithoutResettingLayout(layout: LayoutConfiguration): LayoutConfiguration {
++        return layout.copy(
++            layoutVariants = layout.layoutVariants.mapValues { (variant, uiLayout) ->
++                val components = uiLayout.mainScreenLayout.components ?: return@mapValues uiLayout
++                if (components.any { it.component == LayoutComponent.BUTTON_KH_CINEMATIC_ROTATE }) return@mapValues uiLayout
++
++                val safeWidth = variant.uiSize.x - variant.uiInsets.left - variant.uiInsets.right
++                val safeHeight = variant.uiSize.y - variant.uiInsets.top - variant.uiInsets.bottom
++                val portrait = variant.uiSize.y > variant.uiSize.x
++                val rect = Rect(
++                    variant.uiInsets.left + (safeWidth * if (portrait) 0.88f else 0.90f).roundToInt(),
++                    variant.uiInsets.top + (safeHeight * if (portrait) 0.05f else 0.08f).roundToInt(),
++                    (safeWidth * if (portrait) 0.09f else 0.07f).roundToInt(),
++                    (safeHeight * if (portrait) 0.06f else 0.10f).roundToInt(),
++                )
++                uiLayout.copy(
++                    mainScreenLayout = uiLayout.mainScreenLayout.copy(
++                        components = components + PositionedLayoutComponent(
++                            rect = rect,
++                            component = LayoutComponent.BUTTON_KH_CINEMATIC_ROTATE,
++                            alpha = 0.85f,
++                        )
++                    )
++                )
++            }
++        )
++    }
++
+ }
+diff --git a/app/src/main/java/me/magnum/melonds/impl/KhCheatDatabaseSeeder.kt b/app/src/main/java/me/magnum/melonds/impl/KhCheatDatabaseSeeder.kt
+new file mode 100644
+index 00000000..735f63d2
+--- /dev/null
++++ b/app/src/main/java/me/magnum/melonds/impl/KhCheatDatabaseSeeder.kt
+@@ -0,0 +1,65 @@
++package me.magnum.melonds.impl
++
++import android.content.Context
++import dagger.hilt.android.qualifiers.ApplicationContext
++import kotlinx.coroutines.Dispatchers
++import kotlinx.coroutines.runBlocking
++import kotlinx.coroutines.withContext
++import me.magnum.melonds.R
++import me.magnum.melonds.common.cheats.CheatDatabaseParserListener
++import me.magnum.melonds.common.cheats.ProgressTrackerInputStream
++import me.magnum.melonds.common.cheats.XmlCheatDatabaseParser
++import me.magnum.melonds.database.entities.CheatDatabaseEntity
++import me.magnum.melonds.domain.model.CheatDatabase
++import me.magnum.melonds.domain.model.Game
++import me.magnum.melonds.domain.repositories.CheatsRepository
++import javax.inject.Inject
++import javax.inject.Singleton
++
++/** Seeds only the six supported regional KH releases without replacing user-imported cheats. */
++@Singleton
++class KhCheatDatabaseSeeder @Inject constructor(
++    @ApplicationContext private val context: Context,
++    private val cheatsRepository: CheatsRepository,
++) {
++    suspend fun seedIfNeeded() = withContext(Dispatchers.IO) {
++        val existingGames = cheatsRepository.getGames()
++            .map { it.gameCode to it.gameChecksum }
++            .toMutableSet()
++        if (existingGames.containsAll(SUPPORTED_RELEASES)) return@withContext
++
++        context.resources.openRawResource(R.raw.kh_remix_cheats).use { input ->
++            XmlCheatDatabaseParser().parseCheatDatabase(
++                ProgressTrackerInputStream(input),
++                object : CheatDatabaseParserListener {
++                    override fun onDatabaseParseStart(databaseName: String): CheatDatabase = runBlocking {
++                        cheatsRepository.addCheatDatabase(CheatDatabaseEntity.KH_REMIX_CHEATS_DATABASE_NAME)
++                    }
++
++                    override fun onGameParseStart(gameName: String) = Unit
++
++                    override fun onGameParsed(game: Game) {
++                        val release = game.gameCode to game.gameChecksum
++                        if (release !in existingGames) {
++                            runBlocking { cheatsRepository.addGameCheats(game) }
++                            existingGames += release
++                        }
++                    }
++
++                    override fun onParseComplete() = Unit
++                },
++            )
++        }
++    }
++
++    companion object {
++        private val SUPPORTED_RELEASES = setOf(
++            "YKGP" to "B54EA877",
++            "YKGJ" to "7F96A5B7",
++            "YKGE" to "826DCE31",
++            "BK9P" to "5060245E",
++            "BK9J" to "34A21EC0",
++            "BK9E" to "B2D419DE",
++        )
++    }
++}
+diff --git a/app/src/main/java/me/magnum/melonds/impl/RoomCheatsRepository.kt b/app/src/main/java/me/magnum/melonds/impl/RoomCheatsRepository.kt
+index 979dd825..9b77af27 100644
+--- a/app/src/main/java/me/magnum/melonds/impl/RoomCheatsRepository.kt
++++ b/app/src/main/java/me/magnum/melonds/impl/RoomCheatsRepository.kt
+@@ -140,6 +140,9 @@ class RoomCheatsRepository(private val context: Context, private val database: M
+     }
+ 
+     override suspend fun addCheatDatabase(databaseName: String): CheatDatabase {
++        database.cheatDatabaseDao().findCheatDatabaseByName(databaseName)?.let {
++            return CheatDatabase(it.id, it.name)
++        }
+         val cheatDatabaseEntity = CheatDatabaseEntity(
+             null,
+             databaseName,
+@@ -283,4 +286,4 @@ class RoomCheatsRepository(private val context: Context, private val database: M
+                 }
+             }
+     }
+-}
+\ No newline at end of file
++}
+diff --git a/app/src/main/java/me/magnum/melonds/ui/emulator/RuntimeLayoutView.kt b/app/src/main/java/me/magnum/melonds/ui/emulator/RuntimeLayoutView.kt
+index cb44180b..529eca8f 100644
+--- a/app/src/main/java/me/magnum/melonds/ui/emulator/RuntimeLayoutView.kt
++++ b/app/src/main/java/me/magnum/melonds/ui/emulator/RuntimeLayoutView.kt
+@@ -46,6 +46,8 @@ class RuntimeLayoutView(context: Context, attrs: AttributeSet? = null) : LayoutV
+     private var areScreensSwapped = false
+     private var connectedControllersState: ConnectedControllersState = ConnectedControllersState.NoControllers
+     private var khTouchControlSceneMode = 0
++    private var isKhCinematicPlaying = false
++    private var khCinematicRotateAction: (() -> Unit)? = null
+     private val autoHideHandler = Handler(Looper.getMainLooper())
+     private val autoHideRunnable = Runnable { fadeSoftInputs() }
+ 
+@@ -85,6 +87,19 @@ class RuntimeLayoutView(context: Context, attrs: AttributeSet? = null) : LayoutV
+         animateKhSceneControls(previouslyHidden - nowHidden, false)
+     }
+ 
++    fun setKhCinematicRotateControl(isPlaying: Boolean, onRotate: () -> Unit) {
++        isKhCinematicPlaying = isPlaying
++        khCinematicRotateAction = onRotate
++        bindKhCinematicRotateControl()
++        updateVisibility()
++    }
++
++    private fun bindKhCinematicRotateControl() {
++        getLayoutComponentView(LayoutComponent.BUTTON_KH_CINEMATIC_ROTATE)?.view?.setOnClickListener {
++            khCinematicRotateAction?.invoke()
++        }
++    }
++
+     fun toggleSoftInputVisibility() {
+         isSoftInputVisible = !isSoftInputVisible
+         setLayoutComponentToggleState(LayoutComponent.BUTTON_TOGGLE_SOFT_INPUT, isSoftInputVisible)
+@@ -116,6 +131,7 @@ class RuntimeLayoutView(context: Context, attrs: AttributeSet? = null) : LayoutV
+         currentRuntimeLayout = runtimeLayout
+         instantiateLayout(runtimeLayout.layout, layoutTarget)
+         placeTouchZonesBehindControls(layoutTarget)
++        bindKhCinematicRotateControl()
+         updateInputs()
+         updateVisibility()
+         setLayoutComponentToggleState(LayoutComponent.BUTTON_TOGGLE_SOFT_INPUT, isSoftInputVisible)
+@@ -306,6 +322,9 @@ class RuntimeLayoutView(context: Context, attrs: AttributeSet? = null) : LayoutV
+         }
+ 
+         hiddenComponents = (hiddenComponents + khSceneHiddenComponents(khTouchControlSceneMode)).distinct()
++        if (!isKhCinematicPlaying) {
++            hiddenComponents = (hiddenComponents + LayoutComponent.BUTTON_KH_CINEMATIC_ROTATE).distinct()
++        }
+         return hiddenComponents.toSet()
+     }
+ 
+diff --git a/app/src/main/java/me/magnum/melonds/ui/romdetails/RomDetailsActivity.kt b/app/src/main/java/me/magnum/melonds/ui/romdetails/RomDetailsActivity.kt
+index 908850e3..bbe4d8e2 100644
+--- a/app/src/main/java/me/magnum/melonds/ui/romdetails/RomDetailsActivity.kt
++++ b/app/src/main/java/me/magnum/melonds/ui/romdetails/RomDetailsActivity.kt
+@@ -23,6 +23,8 @@ import me.magnum.melonds.domain.model.ConsoleType
+ import me.magnum.melonds.domain.model.rom.Rom
+ import me.magnum.melonds.domain.model.rom.config.LaunchDisplayProfile
+ import me.magnum.melonds.ui.common.rom.EmulatorLaunchValidatorDelegate
++import me.magnum.melonds.parcelables.RomInfoParcelable
++import me.magnum.melonds.ui.cheats.CheatsActivity
+ import me.magnum.melonds.ui.emulator.EmulatorActivity
+ import me.magnum.melonds.ui.romdetails.ui.RomDetailsScreen
+ import me.magnum.melonds.ui.theme.MelonTheme
+@@ -66,6 +68,7 @@ class RomDetailsActivity : AppCompatActivity() {
+ 
+         setContent {
+             val rom by romDetailsViewModel.rom.collectAsState()
++            val romInfo by romDetailsViewModel.romInfo.collectAsState()
+             val romConfig by romDetailsViewModel.romConfigUiState.collectAsState()
+ 
+             val retroAchievementsUiState by romRetroAchievementsViewModel.uiState.collectAsState()
+@@ -79,6 +82,7 @@ class RomDetailsActivity : AppCompatActivity() {
+             MelonTheme {
+                 RomDetailsScreen(
+                     rom = rom,
++                    romInfo = romInfo,
+                     romConfigUiState = romConfig,
+                     retroAchievementsUiState = retroAchievementsUiState,
+                     onNavigateBack = { onNavigateUp() },
+@@ -92,6 +96,13 @@ class RomDetailsActivity : AppCompatActivity() {
+                     onRomConfigUpdate = {
+                         romDetailsViewModel.onRomConfigUpdateEvent(it)
+                     },
++                    onOpenCheats = {
++                        romInfo?.let { info ->
++                            startActivity(Intent(this@RomDetailsActivity, CheatsActivity::class.java).apply {
++                                putExtra(CheatsActivity.KEY_ROM_INFO, RomInfoParcelable.fromRomInfo(info))
++                            })
++                        }
++                    },
+                     onRetroAchievementsLogin = { username, password ->
+                         romRetroAchievementsViewModel.login(username, password)
+                     },
+diff --git a/app/src/main/java/me/magnum/melonds/ui/romdetails/RomDetailsViewModel.kt b/app/src/main/java/me/magnum/melonds/ui/romdetails/RomDetailsViewModel.kt
+index 25fc9868..e8e56722 100644
+--- a/app/src/main/java/me/magnum/melonds/ui/romdetails/RomDetailsViewModel.kt
++++ b/app/src/main/java/me/magnum/melonds/ui/romdetails/RomDetailsViewModel.kt
+@@ -8,9 +8,12 @@ import kotlinx.coroutines.flow.MutableStateFlow
+ import kotlinx.coroutines.flow.asStateFlow
+ import kotlinx.coroutines.flow.map
+ import kotlinx.coroutines.flow.update
++import kotlinx.coroutines.Dispatchers
+ import kotlinx.coroutines.launch
+ import me.magnum.melonds.common.Permission
+ import me.magnum.melonds.common.UriPermissionManager
++import me.magnum.melonds.common.romprocessors.RomFileProcessorFactory
++import me.magnum.melonds.domain.model.RomInfo
+ import me.magnum.melonds.domain.model.rom.Rom
+ import me.magnum.melonds.domain.model.rom.config.RomConfig
+ import me.magnum.melonds.domain.model.rom.config.RomGbaSlotConfig
+@@ -31,14 +34,26 @@ class RomDetailsViewModel @Inject constructor(
+     private val settingsRepository: SettingsRepository,
+     private val romIconProvider: RomIconProvider,
+     private val uriPermissionManager: UriPermissionManager,
++    private val romFileProcessorFactory: RomFileProcessorFactory,
+     savedStateHandle: SavedStateHandle,
+ ) : ViewModel() {
+ 
+     private val _rom = MutableStateFlow(savedStateHandle.get<RomParcelable>(RomDetailsActivity.KEY_ROM)!!.rom)
+     val rom = _rom.asStateFlow()
+ 
++    private val _romInfo = MutableStateFlow<RomInfo?>(null)
++    val romInfo = _romInfo.asStateFlow()
++
+     private val _romConfig = MutableStateFlow(_rom.value.config)
+ 
++    init {
++        viewModelScope.launch(Dispatchers.IO) {
++            _romInfo.value = romFileProcessorFactory
++                .getFileRomProcessorForDocument(_rom.value.uri)
++                ?.getRomInfo(_rom.value)
++        }
++    }
++
+     val romConfigUiState by lazy {
+         val uiStateFlow = MutableStateFlow<RomConfigUiState>(RomConfigUiState.Loading)
+         viewModelScope.launch {
+diff --git a/app/src/main/java/me/magnum/melonds/ui/romdetails/ui/RomConfigUi.kt b/app/src/main/java/me/magnum/melonds/ui/romdetails/ui/RomConfigUi.kt
+index 03f7a90c..d440716a 100644
+--- a/app/src/main/java/me/magnum/melonds/ui/romdetails/ui/RomConfigUi.kt
++++ b/app/src/main/java/me/magnum/melonds/ui/romdetails/ui/RomConfigUi.kt
+@@ -32,6 +32,7 @@ import me.magnum.melonds.R
+ import me.magnum.melonds.common.Permission
+ import me.magnum.melonds.common.contracts.FilePickerContract
+ import me.magnum.melonds.domain.model.rom.Rom
++import me.magnum.melonds.domain.model.RomInfo
+ import me.magnum.melonds.domain.model.rom.config.RomConfig
+ import me.magnum.melonds.domain.model.rom.config.LaunchDisplayProfile
+ import me.magnum.melonds.ui.common.MelonPreviewSet
+@@ -53,8 +54,10 @@ fun RomConfigUi(
+     modifier: Modifier,
+     contentPadding: PaddingValues,
+     rom: Rom,
++    romInfo: RomInfo?,
+     romConfigUiState: RomConfigUiState,
+     onConfigUpdate: (RomConfigUpdateEvent) -> Unit,
++    onOpenCheats: () -> Unit,
+ ) {
+     when (romConfigUiState) {
+         is RomConfigUiState.Loading -> Loading(modifier.padding(contentPadding))
+@@ -62,8 +65,10 @@ fun RomConfigUi(
+             modifier = modifier,
+             contentPadding = contentPadding,
+             rom = rom,
++            romInfo = romInfo,
+             romConfig = romConfigUiState.romConfigUiModel,
+             onConfigUpdate = onConfigUpdate,
++            onOpenCheats = onOpenCheats,
+         )
+     }
+ }
+@@ -83,8 +88,10 @@ private fun Content(
+     modifier: Modifier,
+     contentPadding: PaddingValues,
+     rom: Rom,
++    romInfo: RomInfo?,
+     romConfig: RomConfigUiModel,
+     onConfigUpdate: (RomConfigUpdateEvent) -> Unit,
++    onOpenCheats: () -> Unit,
+ ) {
+     Column(
+         modifier = modifier.verticalScroll(rememberScrollState())
+@@ -94,6 +101,7 @@ private fun Content(
+             ),
+     ) {
+         val context = LocalContext.current
++        val isKhGame = romInfo?.gameCode in KH_GAME_CODES
+         val launchProfiles = listOf(
+             LaunchDisplayProfile.AUTOMATIC,
+             LaunchDisplayProfile.PORTRAIT_4_3,
+@@ -159,17 +167,21 @@ private fun Content(
+             }
+         )
+ 
+-        val gbaSlotOptions = stringArrayResource(id = R.array.gba_slot_options)
+-        SingleChoiceItem(
+-            name = stringResource(id = R.string.label_rom_config_gba_slot),
+-            value = gbaSlotOptions[romConfig.gbaSlotConfig.type.ordinal],
+-            items = gbaSlotOptions.toList(),
+-            selectedItemIndex = romConfig.gbaSlotConfig.type.ordinal,
+-            onItemSelected = {
+-                onConfigUpdate(RomConfigUpdateEvent.GbaSlotTypeUpdated(RomGbaSlotConfigUiModel.Type.entries[it]))
+-            }
+-        )
++        if (isKhGame) {
++            ActionLauncherItem(
++                name = stringResource(id = R.string.kh_per_game_cheats),
++                value = stringResource(id = R.string.kh_per_game_cheats_value),
++                onLaunchAction = onOpenCheats,
++            )
++            androidx.compose.material.Text(
++                text = stringResource(R.string.kh_cheats_warning),
++                style = MaterialTheme.typography.caption,
++                color = MaterialTheme.colors.onSurface.copy(alpha = 0.68f),
++                modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 8.dp),
++            )
++        }
+ 
++        val gbaSlotOptions = stringArrayResource(id = R.array.gba_slot_options)
+         val gbaRomSelectorLauncher = rememberLauncherForActivityResult(FilePickerContract(Permission.READ)) { result ->
+             if (result != null) {
+                 onConfigUpdate(RomConfigUpdateEvent.GbaRomPathUpdate(result))
+@@ -181,25 +193,37 @@ private fun Content(
+             }
+         }
+ 
+-        AnimatedVisibility(visible = romConfig.gbaSlotConfig.type == RomGbaSlotConfigUiModel.Type.GbaRom) {
+-            Column {
+-                ActionLauncherItem(
+-                    name = stringResource(id = R.string.label_rom_config_gba_rom_path),
+-                    value = romConfig.gbaSlotConfig.gbaRomPath ?: stringResource(id = R.string.not_set),
+-                    enabled = true,
+-                    onLaunchAction = {
+-                        gbaRomSelectorLauncher.launch(Pair(null, null))
+-                    }
+-                )
++        if (!isKhGame) {
++            SingleChoiceItem(
++                name = stringResource(id = R.string.label_rom_config_gba_slot),
++                value = gbaSlotOptions[romConfig.gbaSlotConfig.type.ordinal],
++                items = gbaSlotOptions.toList(),
++                selectedItemIndex = romConfig.gbaSlotConfig.type.ordinal,
++                onItemSelected = {
++                    onConfigUpdate(RomConfigUpdateEvent.GbaSlotTypeUpdated(RomGbaSlotConfigUiModel.Type.entries[it]))
++                }
++            )
+ 
+-                ActionLauncherItem(
+-                    name = stringResource(id = R.string.label_rom_config_gba_save_path),
+-                    value = romConfig.gbaSlotConfig.gbaSavePath ?: stringResource(id = R.string.not_set),
+-                    enabled = true,
+-                    onLaunchAction = {
+-                        gbaSaveSelectorLauncher.launch(Pair(null, null))
+-                    }
+-                )
++            AnimatedVisibility(visible = romConfig.gbaSlotConfig.type == RomGbaSlotConfigUiModel.Type.GbaRom) {
++                Column {
++                    ActionLauncherItem(
++                        name = stringResource(id = R.string.label_rom_config_gba_rom_path),
++                        value = romConfig.gbaSlotConfig.gbaRomPath ?: stringResource(id = R.string.not_set),
++                        enabled = true,
++                        onLaunchAction = {
++                            gbaRomSelectorLauncher.launch(Pair(null, null))
++                        }
++                    )
++
++                    ActionLauncherItem(
++                        name = stringResource(id = R.string.label_rom_config_gba_save_path),
++                        value = romConfig.gbaSlotConfig.gbaSavePath ?: stringResource(id = R.string.not_set),
++                        enabled = true,
++                        onLaunchAction = {
++                            gbaSaveSelectorLauncher.launch(Pair(null, null))
++                        }
++                    )
++                }
+             }
+         }
+ 
+@@ -225,6 +249,7 @@ private fun PreviewRomConfigUi() {
+                 isDsiWareTitle = false,
+                 retroAchievementsHash = "",
+             ),
++            romInfo = null,
+             romConfigUiState = RomConfigUiState.Ready(
+                 RomConfigUiModel(
+                     layoutName = "Default",
+@@ -232,6 +257,9 @@ private fun PreviewRomConfigUi() {
+                 ),
+             ),
+             onConfigUpdate = { },
++            onOpenCheats = { },
+         )
+     }
+ }
++
++private val KH_GAME_CODES = setOf("YKGE", "YKGP", "YKGJ", "BK9E", "BK9P", "BK9J")
+diff --git a/app/src/main/java/me/magnum/melonds/ui/romdetails/ui/RomDetailsScreen.kt b/app/src/main/java/me/magnum/melonds/ui/romdetails/ui/RomDetailsScreen.kt
+index d42ddb82..a5131103 100644
+--- a/app/src/main/java/me/magnum/melonds/ui/romdetails/ui/RomDetailsScreen.kt
++++ b/app/src/main/java/me/magnum/melonds/ui/romdetails/ui/RomDetailsScreen.kt
+@@ -22,6 +22,7 @@ import androidx.compose.ui.input.key.key
+ import androidx.compose.ui.input.key.onPreviewKeyEvent
+ import kotlinx.coroutines.launch
+ import me.magnum.melonds.domain.model.rom.Rom
++import me.magnum.melonds.domain.model.RomInfo
+ import me.magnum.melonds.domain.model.rom.config.RomConfig
+ import me.magnum.melonds.ui.common.MelonPreviewSet
+ import me.magnum.melonds.ui.romdetails.model.RomConfigUiModel
+@@ -36,11 +37,13 @@ import java.util.Date
+ @Composable
+ fun RomDetailsScreen(
+     rom: Rom,
++    romInfo: RomInfo?,
+     romConfigUiState: RomConfigUiState,
+     retroAchievementsUiState: RomRetroAchievementsUiState,
+     onNavigateBack: () -> Unit,
+     onLaunchRom: (Rom) -> Unit,
+     onRomConfigUpdate: (RomConfigUpdateEvent) -> Unit,
++    onOpenCheats: () -> Unit,
+     onRetroAchievementsLogin: (username: String, password: String) -> Unit,
+     onRetroAchievementsRetryLoad: () -> Unit,
+     onViewAchievement: (RAAchievement) -> Unit,
+@@ -108,8 +111,10 @@ fun RomDetailsScreen(
+                         modifier = Modifier.fillMaxSize().focusRequester(focusRequester),
+                         contentPadding = padding,
+                         rom = rom,
++                        romInfo = romInfo,
+                         romConfigUiState = romConfigUiState,
+                         onConfigUpdate = onRomConfigUpdate,
++                        onOpenCheats = onOpenCheats,
+                     )
+                 }
+                 RomDetailsTab.RETRO_ACHIEVEMENTS.tabIndex -> {
+@@ -147,6 +152,7 @@ private fun PreviewRomScreen() {
+                 isDsiWareTitle = false,
+                 retroAchievementsHash = "",
+             ),
++            romInfo = null,
+             romConfigUiState = RomConfigUiState.Ready(
+                 RomConfigUiModel(
+                     layoutName = "Default",
+@@ -156,9 +162,10 @@ private fun PreviewRomScreen() {
+             onNavigateBack = { },
+             onLaunchRom = { },
+             onRomConfigUpdate = { },
++            onOpenCheats = { },
+             onRetroAchievementsLogin = { _, _ -> },
+             onRetroAchievementsRetryLoad = { },
+             onViewAchievement = { },
+         )
+     }
+-}
+\ No newline at end of file
++}
+diff --git a/app/src/main/java/me/magnum/melonds/ui/romlist/RomListActivity.kt b/app/src/main/java/me/magnum/melonds/ui/romlist/RomListActivity.kt
+index 69689763..cd960ec0 100644
+--- a/app/src/main/java/me/magnum/melonds/ui/romlist/RomListActivity.kt
++++ b/app/src/main/java/me/magnum/melonds/ui/romlist/RomListActivity.kt
+@@ -41,6 +41,7 @@ import me.magnum.melonds.domain.model.RomScanningStatus
+ import me.magnum.melonds.domain.model.appupdate.AppUpdate
+ import me.magnum.melonds.domain.model.rom.Rom
+ import me.magnum.melonds.domain.model.rom.config.LaunchDisplayProfile
++import me.magnum.melonds.impl.KhCheatDatabaseSeeder
+ import me.magnum.melonds.parcelables.RomParcelable
+ import me.magnum.melonds.ui.common.melonTextButtonColors
+ import me.magnum.melonds.ui.common.rom.EmulatorLaunchValidatorDelegate
+@@ -70,6 +71,7 @@ class RomListActivity : AppCompatActivity() {
+     private val updatesViewModel: UpdatesViewModel by viewModels()
+ 
+     @Inject lateinit var khAssetsFolderManager: KhAssetsFolderManager
++    @Inject lateinit var khCheatDatabaseSeeder: KhCheatDatabaseSeeder
+ 
+     private var khAssetsPrompt by mutableStateOf<KhAssetsPrompt?>(null)
+     private var isMigratingKhAssets by mutableStateOf(false)
+@@ -77,6 +79,7 @@ class RomListActivity : AppCompatActivity() {
+     private var isFoldableInnerDisplay = false
+     private var showRemixGuide by mutableStateOf(false)
+     private var remixGuideIsFirstLaunch = false
++    private var remixGuideIsWhatsNew = false
+ 
+     // The all-files-access settings screen reports nothing back; re-check on return.
+     private val allFilesAccessLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+@@ -92,9 +95,15 @@ class RomListActivity : AppCompatActivity() {
+         enableEdgeToEdge(statusBarStyle = SystemBarStyle.dark(Color.TRANSPARENT))
+         super.onCreate(savedInstanceState)
+ 
++        lifecycleScope.launch {
++            runCatching { khCheatDatabaseSeeder.seedIfNeeded() }
++                .onFailure { it.printStackTrace() }
++        }
++
+         if (savedInstanceState == null) {
+             remixGuideIsFirstLaunch = shouldShowRemixGuideOnLaunch()
+-            showRemixGuide = remixGuideIsFirstLaunch
++            remixGuideIsWhatsNew = !remixGuideIsFirstLaunch && shouldShowRemixWhatsNewOnLaunch()
++            showRemixGuide = remixGuideIsFirstLaunch || remixGuideIsWhatsNew
+         }
+ 
+         lifecycleScope.launch {
+@@ -197,6 +206,7 @@ class RomListActivity : AppCompatActivity() {
+                     },
+                     onOpenRemixGuide = {
+                         remixGuideIsFirstLaunch = false
++                        remixGuideIsWhatsNew = false
+                         showRemixGuide = true
+                     },
+                     retrieveRomIcon = { rom ->
+@@ -323,13 +333,16 @@ class RomListActivity : AppCompatActivity() {
+                 if (showRemixGuide) {
+                     RemixGuideUi(
+                         firstLaunch = remixGuideIsFirstLaunch,
++                        whatsNew = remixGuideIsWhatsNew,
+                         onDismiss = {
+                             getSharedPreferences(REMIX_PREFERENCES, MODE_PRIVATE)
+                                 .edit()
+                                 .putBoolean(KEY_REMIX_GUIDE_COMPLETED, true)
++                                .putString(KEY_REMIX_WHATS_NEW_SHOWN, REMIX_WHATS_NEW_REVISION)
+                                 .apply()
+                             showRemixGuide = false
+                             remixGuideIsFirstLaunch = false
++                            remixGuideIsWhatsNew = false
+                         },
+                     )
+                 }
+@@ -353,6 +366,11 @@ class RomListActivity : AppCompatActivity() {
+         return isFreshInstallation
+     }
+ 
++    private fun shouldShowRemixWhatsNewOnLaunch(): Boolean {
++        return getSharedPreferences(REMIX_PREFERENCES, MODE_PRIVATE)
++            .getString(KEY_REMIX_WHATS_NEW_SHOWN, null) != REMIX_WHATS_NEW_REVISION
++    }
++
+     // [KHMM]
+     private fun dismissKhAssetsPrompt() {
+         khAssetsFolderManager.setSetupPromptHandled()
+@@ -408,5 +426,7 @@ class RomListActivity : AppCompatActivity() {
+     private companion object {
+         const val REMIX_PREFERENCES = "saltlords_remix"
+         const val KEY_REMIX_GUIDE_COMPLETED = "guide_completed"
++        const val KEY_REMIX_WHATS_NEW_SHOWN = "whats_new_shown"
++        const val REMIX_WHATS_NEW_REVISION = "1.1.1-first-edition"
+     }
+ }
+diff --git a/app/src/main/java/me/magnum/melonds/ui/romlist/UpdatesViewModel.kt b/app/src/main/java/me/magnum/melonds/ui/romlist/UpdatesViewModel.kt
+index ccd7ff9d..35ad97d4 100644
+--- a/app/src/main/java/me/magnum/melonds/ui/romlist/UpdatesViewModel.kt
++++ b/app/src/main/java/me/magnum/melonds/ui/romlist/UpdatesViewModel.kt
+@@ -25,15 +25,8 @@ class UpdatesViewModel @Inject constructor(
+     private val _updateDownloadProgressEvent = Channel<DownloadProgress>(Channel.CONFLATED)
+     val updateDownloadProgressEvent = _updateDownloadProgressEvent.receiveAsFlow()
+ 
+-    init {
+-        viewModelScope.launch {
+-            updatesRepository.checkNewUpdate().map {
+-                if (it != null) {
+-                    _appUpdate.send(it)
+-                }
+-            }
+-        }
+-    }
++    // Saltlord's Remix must never offer an upstream MelonMix APK as an in-app update.
++    // Re-enable this only after a Remix-owned release feed and signing path are available.
+ 
+     fun downloadUpdate(update: AppUpdate) {
+         viewModelScope.launch {
+@@ -49,4 +42,4 @@ class UpdatesViewModel @Inject constructor(
+     fun skipUpdate(update: AppUpdate) {
+         updatesRepository.skipUpdate(update)
+     }
+-}
+\ No newline at end of file
++}
+diff --git a/app/src/main/java/me/magnum/melonds/ui/romlist/ui/RemixGuideUi.kt b/app/src/main/java/me/magnum/melonds/ui/romlist/ui/RemixGuideUi.kt
+index 8f329f36..8af3016c 100644
+--- a/app/src/main/java/me/magnum/melonds/ui/romlist/ui/RemixGuideUi.kt
++++ b/app/src/main/java/me/magnum/melonds/ui/romlist/ui/RemixGuideUi.kt
+@@ -28,7 +28,7 @@ import androidx.compose.ui.window.DialogProperties
+ import me.magnum.melonds.BuildConfig
+ 
+ @Composable
+-fun RemixGuideUi(firstLaunch: Boolean, onDismiss: () -> Unit) {
++fun RemixGuideUi(firstLaunch: Boolean, whatsNew: Boolean = false, onDismiss: () -> Unit) {
+     Dialog(
+         onDismissRequest = { if (!firstLaunch) onDismiss() },
+         properties = DialogProperties(usePlatformDefaultWidth = false),
+@@ -40,7 +40,20 @@ fun RemixGuideUi(firstLaunch: Boolean, onDismiss: () -> Unit) {
+                         .padding(horizontal = 24.dp, vertical = 28.dp),
+                     verticalArrangement = Arrangement.spacedBy(16.dp),
+                 ) {
+-                    Text("Melon Mix: Saltlord’s Remix", style = MaterialTheme.typography.h5, fontWeight = FontWeight.Bold)
++                    Text(
++                        if (whatsNew) "What’s new in Saltlord’s Remix" else "Melon Mix: Saltlord’s Remix",
++                        style = MaterialTheme.typography.h5,
++                        fontWeight = FontWeight.Bold,
++                    )
++                    if (whatsNew) {
++                        GuideSection("Cinematic & launcher polish", listOf(
++                            "Choose regular or reverse landscape for HD cinematics",
++                            "Place and resize the cinematic Rotate control in the layout editor",
++                            "A refreshed launcher-icon identity that prompts Android launchers to reload the Remix artwork",
++                            "Preloaded per-game cheats for all six regional releases of 358/2 Days and Re:coded",
++                            "The upstream MelonMix updater is disabled until Remix has its own safe release feed",
++                        ))
++                    }
+                     Text(
+                         "A human-directed, Android-focused fork built to make the Kingdom Hearts Nintendo DS games feel at home on modern touch devices.",
+                         style = MaterialTheme.typography.body1,
+@@ -55,6 +68,7 @@ fun RemixGuideUi(firstLaunch: Boolean, onDismiss: () -> Unit) {
+                         "Portrait 4:3, landscape 4:3 and fullscreen landscape launch profiles",
+                         "Foldable-aware layouts and custom viewport positioning",
+                         "HD cinematics with optional landscape preference, manual rotation and gameplay-orientation restoration",
++                        "A preloaded, individually toggleable Kingdom Hearts cheat collection",
+                         "Saltlord’s Remix launcher icon and red, black and warm-gold visual identity",
+                     ))
+                     GuideSection("Display profiles", listOf(
+@@ -70,6 +84,7 @@ fun RemixGuideUi(firstLaunch: Boolean, onDismiss: () -> Unit) {
+                     ))
+                     GuideSection("Credits & development", listOf(
+                         "Built upon KH Melon Mix, MelonMix Android, melonDS Android and melonDS.",
++                        "Bundled Kingdom Hearts cheat codes are a curated subset of DeadSkullzJr’s NDS(i) Cheat Database (2025-08-12 release); Saltlord’s Remix packages the relevant entries for convenience and does not claim authorship of them.",
+                         "AI assistance has supported research, implementation and debugging under human direction. Upstream attribution remains essential, and useful bug reports are welcome.",
+                     ))
+                     Divider()
+diff --git a/app/src/main/res/raw/kh_remix_cheats.xml b/app/src/main/res/raw/kh_remix_cheats.xml
+new file mode 100644
+index 00000000..d64d4712
+--- /dev/null
++++ b/app/src/main/res/raw/kh_remix_cheats.xml
+@@ -0,0 +1,3194 @@
++<?xml version='1.0' encoding='utf-8'?>
++<codelist>
++  <name>Saltlord's Remix Kingdom Hearts Cheat Database (DeadSkullzJr 20250812 subset)</name>
++  <game>
++    <name>Kingdom Hearts - 358-2 Days (Europe)</name>
++    <gameid>YKGP B54EA877</gameid>
++    <date>2025/08/12 19:36</date>
++    <folder>
++      <name>Miscellaneous Codes</name>
++      <allowedon>0</allowedon>
++      <cheat>
++        <name>Max/Infinite Money (Press Select)</name>
++        <codes>94000130 FFFB0000 021953A0 000F423F D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Moogle Shop is Free</name>
++        <codes>9208CF82 0000E1C0 0208CF84 E3A02000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Max Heart Points (Press Select)</name>
++        <codes>94000130 FFFB0000 021953A4 000F423F D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>All Enemy Profiles (Press Select)</name>
++        <codes>94000130 FFFB0000 C0000000 00000072 22195DA9 00000001 DC000000 00000001 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Enable All Missions (Press Select)</name>
++        <note>Might affect storyline</note>
++        <codes>94000130 FFFB0000 22195432 00000003 22195B21 00000073 22195B22 0000003B C0000000 00000017 021954D0 FFFFFFFF DC000000 00000004 D2000000 00000000</codes>
++      </cheat>
++    </folder>
++    <folder>
++      <name>Difficulty Codes (Select)</name>
++      <allowedon>1</allowedon>
++      <cheat>
++        <name>Beginner</name>
++        <codes>94000130 FFFB0000 2219542A 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Standard</name>
++        <codes>94000130 FFFB0000 2219542A 00000010 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Proud</name>
++        <codes>94000130 FFFB0000 2219542A 00000020 D0000000 00000000</codes>
++      </cheat>
++    </folder>
++    <folder>
++      <name>Rank Codes (Select)</name>
++      <note>Use at own risk</note>
++      <allowedon>1</allowedon>
++      <cheat>
++        <name>Legend</name>
++        <codes>94000130 FFFB0000 02195430 00030000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Expert</name>
++        <codes>94000130 FFFB0000 02195430 00020000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Rookie</name>
++        <codes>94000130 FFFB0000 02195430 00010000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Novice</name>
++        <codes>94000130 FFFB0000 02195430 0004FFFF D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Xemnas</name>
++        <codes>94000130 FFFB0000 02195430 0003FFFF D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Master</name>
++        <codes>94000130 FFFB0000 02195430 0002FFFF D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Agent</name>
++        <codes>94000130 FFFB0000 02195430 0001FFFF D0000000 00000000</codes>
++      </cheat>
++    </folder>
++    <folder>
++      <name>Mission Related Codes</name>
++      <note>Might Not Work On All Missions</note>
++      <allowedon>0</allowedon>
++      <cheat>
++        <name>Time Never Increase</name>
++        <codes>9206F800 0000C020 0206F804 E3A0000B D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Time Never Increase v2 (L+R+Up/Down = On/Off)</name>
++        <codes>94000130 FCBF0000 5206F804 E0800001 0206F804 E3A0000B D2000000 00000000 94000130 FC7F0000 5206F804 E3A0000B 0206F804 E0800001 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Grandstander Minigame Never Ends (X+Y+Up/Down = ON/OFF)</name>
++        <codes>94000130 FFBF0000 94000136 FFFC0000 520CC384 E58613B8 520CD0AC E1C427B0 020CC384 E1A00000 020CD0AC E1A00000 D2000000 00000000 94000130 FF7F0000 94000136 FFFC0000 520CC384 E1A00000 520CD0AC E1A00000 020CC384 E58613B8 020CD0AC E1C427B0 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Instant Mission Complete</name>
++        <note>Have Effects on Normal Mission</note>
++        <codes>92069FEC 00002100 12069FEE 000020C8 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Mission Gauge Max When Increase</name>
++        <note>Have Effects on Normal Mission</note>
++        <codes>9206C672 0000E595 0206C674 E3A010C8 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Organization Emblem Rings Never Shrink</name>
++        <codes>520804DC E58012B8 52080524 E1822A01 5208052C 158021EC 52080530 158021E8 52080534 158021E4 020804DC E1A00000 02080524 E3A02A05 0208052C E58021EC 02080530 E58021E8 02080534 E58021E4 D2000000 00000000</codes>
++      </cheat>
++    </folder>
++    <folder>
++      <name>Nobody Symbols Codes</name>
++      <note>Earned from Challenges</note>
++      <allowedon>1</allowedon>
++      <cheat>
++        <name>99 Nobody Symbols (Press Select)</name>
++        <codes>94000130 FFFB0000 12196D02 00000063 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>999 Nobody Symbols (Press Select)</name>
++        <codes>94000130 FFFB0000 12196D02 000003E7 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>255 Nobody Symbols (Press Select)</name>
++        <codes>94000130 FFFB0000 12196D02 000000FF D2000000 00000000</codes>
++      </cheat>
++    </folder>
++    <folder>
++      <name>Crown Symbols Codes</name>
++      <note>Earned from Mission Mode Missions</note>
++      <allowedon>1</allowedon>
++      <cheat>
++        <name>99 Crown Symbols (Press Select)</name>
++        <codes>94000130 FFFB0000 12196D00 00000063 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>999 Crown Symbols 999 (Press Select)</name>
++        <codes>94000130 FFFB0000 12196D00 000003E7 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>358 Crown Symbols 358 (Press Select)</name>
++        <codes>94000130 FFFB0000 12196D00 00000166 D2000000 00000000</codes>
++      </cheat>
++    </folder>
++    <folder>
++      <name>Unlock Character Codes</name>
++      <allowedon>0</allowedon>
++      <cheat>
++        <name>Mickey (Select)</name>
++        <codes>94000130 FFFB0000 22195D71 00000001 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Sora (Select)</name>
++        <codes>94000130 FFFB0000 22195D70 00000001 D0000000 00000000</codes>
++      </cheat>
++    </folder>
++    <folder>
++      <name>Panel Codes</name>
++      <allowedon>0</allowedon>
++      <cheat>
++        <name>Max Panel Slots (Select)</name>
++        <codes>94000130 FFFB0000 22195BA9 000000FF D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>All Item Panels (Select)</name>
++        <codes>94000130 FFFB0000 12195BAA 00006363 02195BAC 63636363 02195BB0 63636363 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>All Skill Panels (Select)</name>
++        <codes>94000130 FFFB0000 22195C34 00000063 12195C36 00006363 12195C3C 00006363 12195C5C 00006363 22195C5E 00000063 22195C63 00000063 12195C64 00006363 22195C1D 00000063 12195C1E 00006363 C0000000 00000004 02195C20 63636363 02195C38 63636363 DC000000 00000004 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>All Magic Panels (Select)</name>
++        <codes>94000130 FFFB0000 12195C06 00006363 22195C05 00000063 22195C1C 00000063 22195D67 00000063 12195D68 00006363 C0000000 00000004 02195C08 63636363 DC000000 00000004 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>All Backpack Panels (Select)</name>
++        <codes>94000130 FFFB0000 22195C03 00000063 22195C04 00000063 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>All Upgrade Panels (Select)</name>
++        <codes>94000130 FFFB0000 22195BE7 00000063 02195BE8 63636363 02195BEC 63636363 22195D6D 00000063 12195D6E 00006363 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>All Weapon Panels (Select)</name>
++        <codes>94000130 FFFB0000 22195C94 00000063 22195C99 00000063 22195C9F 00000063 12195CA0 00006363 22195CA2 00000063 C0000000 0000000A 02195C68 63636363 DC000000 00000004 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>All Rings (Select)</name>
++        <codes>94000130 FFFB0000 12195D72 00006363 C0000000 0000000C 02195D74 63636363 DC000000 00000004 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>All Synthesis Ingredients (Select)</name>
++        <codes>94000130 FFFB0000 22195BB5 00000063 22195BB7 00000063 12195BB8 00006363 22195BBB 00000063 12195BBC 00006363 22195BBF 00000063 22195BC0 00000063 22195CA3 00000063 12195CC8 00006363 22195CCA 00000063 12195CD2 00006363 22195CD4 00000063 22195CD9 00000063 22195CDA 00000063 12195CDE 00006363 02195CE0 63636363 02195CE4 63636363 12195CE8 00006363 22195CEB 00000063 12195CB2 00006363 02195CB4 63636363 02195CB8 63636363 02195CBC 63636363 12195D62 00006363 12195D64 00006363 22195D66 00000063 C0000000 00000008 02195CA4 63636363 DC000000 00000004 D2000000 00000000</codes>
++      </cheat>
++    </folder>
++    <folder>
++      <name>Battle Codes</name>
++      <allowedon>0</allowedon>
++      <cheat>
++        <name>HP Never Decrease</name>
++        <note>Might affect your partners</note>
++        <codes>920ACDD2 0000B3A0 020ACDD4 E1A00000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Chain Never Break</name>
++        <codes>9209C072 0000E584 0209C074 E3A00001 0209C18C E3A000FF D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Magic Never Decreases</name>
++        <codes>920357E8 0000700A 120357E8 000046C0 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Raise Magic Maximum</name>
++        <note>Use Ethers to replenish Magic</note>
++        <codes>C0000000 0000000E 2204C715 00000063 DC000000 00000002 D2000000 00000000</codes>
++      </cheat>
++    </folder>
++    <folder>
++      <name>Speed Modifier Codes</name>
++      <allowedon>1</allowedon>
++      <cheat>
++        <name>Speed x 1.5</name>
++        <codes>520ACEC4 E1A04001 020ACEC4 E3A04B06 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Speed x 2</name>
++        <codes>520ACEC4 E1A04001 020ACEC4 E1A04081 D0000000 00000000</codes>
++      </cheat>
++    </folder>
++    <folder>
++      <name>Experience Multiplier Codes</name>
++      <allowedon>1</allowedon>
++      <cheat>
++        <name>x2</name>
++        <codes>5206A678 030CB538 0206A678 034CB538 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>x4</name>
++        <codes>5206A678 030CB538 0206A678 038CB538 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>x8</name>
++        <codes>5206A678 030CB538 0206A678 03CCB538 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>x16</name>
++        <codes>5206A678 030CB538 0206A678 040CB538 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>x32</name>
++        <codes>5206A678 030CB538 0206A678 044CB538 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>x64</name>
++        <codes>5206A678 030CB538 0206A678 048CB538 D0000000 00000000</codes>
++      </cheat>
++    </folder>
++    <folder>
++      <name>Money Multiplier Codes</name>
++      <allowedon>1</allowedon>
++      <cheat>
++        <name>x2</name>
++        <codes>5206A730 482F6981 0206A730 00406980 1206A734 00006148 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>x4</name>
++        <codes>5206A730 482F6981 0206A730 00806980 1206A734 00006148 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>x8</name>
++        <codes>5206A730 482F6981 0206A730 00C06980 1206A734 00006148 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>x16</name>
++        <codes>5206A730 482F6981 0206A730 01006980 1206A734 00006148 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>x32</name>
++        <codes>5206A730 482F6981 0206A730 01406980 1206A734 00006148 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>x64</name>
++        <codes>5206A730 482F6981 0206A730 01806980 1206A734 00006148 D0000000 00000000</codes>
++      </cheat>
++    </folder>
++    <folder>
++      <name>Jump Multiplier Codes</name>
++      <allowedon>1</allowedon>
++      <cheat>
++        <name>x2</name>
++        <codes>92097D5E 0000E585 12097D60 00000EC6 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>x4</name>
++        <codes>92097D5E 0000E585 12097D60 00000D63 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>x8</name>
++        <codes>92097D5E 0000E585 12097D60 00000DC6 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>x16</name>
++        <codes>92097D5E 0000E585 12097D60 00000C63 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>x32</name>
++        <codes>92097D5E 0000E585 12097D60 00000CC6 D0000000 00000000</codes>
++      </cheat>
++    </folder>
++    <folder>
++      <name>Exp/Heart/Munny Multiplier Codes</name>
++      <allowedon>1</allowedon>
++      <cheat>
++        <name>x2</name>
++        <codes>9206C32A 0000E791 1206C32C 00003086 0206C330 EA00000C D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>x4</name>
++        <codes>9206C32A 0000E791 1206C32C 00003106 0206C330 EA00000C D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>x8</name>
++        <codes>9206C32A 0000E791 1206C32C 00003186 0206C330 EA00000C D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>x16</name>
++        <codes>9206C32A 0000E791 1206C32C 00003206 0206C330 EA00000C D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>x32</name>
++        <codes>9206C32A 0000E791 1206C32C 00003286 0206C330 EA00000C D0000000 00000000</codes>
++      </cheat>
++    </folder>
++    <folder>
++      <name>Character 1 Mod Codes (Story Mode)</name>
++      <allowedon>1</allowedon>
++      <cheat>
++        <name>Roxas</name>
++        <codes>9204BDA4 00000002 2204C67B 00000000 D0000000 00000000 9204BDA4 00000080 2204C67B 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Axel</name>
++        <codes>9204BDA4 00000002 2204C67B 00000001 D0000000 00000000 9204BDA4 00000080 2204C67B 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Xigbar</name>
++        <codes>9204BDA4 00000002 2204C67B 00000002 D0000000 00000000 9204BDA4 00000080 2204C67B 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Saix</name>
++        <codes>9204BDA4 00000002 2204C67B 00000003 D0000000 00000000 9204BDA4 00000080 2204C67B 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Xaldin</name>
++        <codes>9204BDA4 00000002 2204C67B 00000004 D0000000 00000000 9204BDA4 00000080 2204C67B 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Sora</name>
++        <codes>9204BDA4 00000002 2204C67B 00000005 D0000000 00000000 9204BDA4 00000080 2204C67B 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Demyx</name>
++        <codes>9204BDA4 00000002 2204C67B 00000006 D0000000 00000000 9204BDA4 00000080 2204C67B 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Larxene</name>
++        <codes>9204BDA4 00000002 2204C67B 00000007 D0000000 00000000 9204BDA4 00000080 2204C67B 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Lexaeus</name>
++        <codes>9204BDA4 00000002 2204C67B 00000008 D0000000 00000000 9204BDA4 00000080 2204C67B 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Luxord</name>
++        <codes>9204BDA4 00000002 2204C67B 00000009 D0000000 00000000 9204BDA4 00000080 2204C67B 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Marluxia</name>
++        <codes>9204BDA4 00000002 2204C67B 0000000A D0000000 00000000 9204BDA4 00000080 2204C67B 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Riku</name>
++        <codes>9204BDA4 00000002 2204C67B 0000000B D0000000 00000000 9204BDA4 00000080 2204C67B 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Vexen</name>
++        <codes>9204BDA4 00000002 2204C67B 0000000C D0000000 00000000 9204BDA4 00000080 2204C67B 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Xemnas</name>
++        <codes>9204BDA4 00000002 2204C67B 0000000D D0000000 00000000 9204BDA4 00000080 2204C67B 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Xion</name>
++        <codes>9204BDA4 00000002 2204C67B 0000000E D0000000 00000000 9204BDA4 00000080 2204C67B 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Zexion</name>
++        <codes>9204BDA4 00000002 2204C67B 0000000F D0000000 00000000 9204BDA4 00000080 2204C67B 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Mickey</name>
++        <codes>9204BDA4 00000002 2204C67B 00000010 D0000000 00000000 9204BDA4 00000080 2204C67B 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Donald</name>
++        <codes>9204BDA4 00000002 2204C67B 00000011 D0000000 00000000 9204BDA4 00000080 2204C67B 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Goofy</name>
++        <codes>9204BDA4 00000002 2204C67B 00000012 D0000000 00000000 9204BDA4 00000080 2204C67B 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Dual Wield Roxas</name>
++        <codes>9204BDA4 00000002 2204C67B 00000013 D0000000 00000000 9204BDA4 00000080 2204C67B 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Hooded Roxas</name>
++        <codes>9204BDA4 00000002 2204C67B 00000014 D0000000 00000000 9204BDA4 00000080 2204C67B 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Hooded Xion</name>
++        <codes>9204BDA4 00000002 2204C67B 00000015 D0000000 00000000 9204BDA4 00000080 2204C67B 00000000 D0000000 00000000</codes>
++      </cheat>
++    </folder>
++    <folder>
++      <name>Character 2 Mod Codes (Story Mode)</name>
++      <allowedon>1</allowedon>
++      <cheat>
++        <name>Roxas</name>
++        <codes>9204BDA4 00000002 2204C77F 00000000 D0000000 00000000 9204BDA4 00000080 2204C77F 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Axel</name>
++        <codes>9204BDA4 00000002 2204C77F 00000001 D0000000 00000000 9204BDA4 00000080 2204C77F 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Xigbar</name>
++        <codes>9204BDA4 00000002 2204C77F 00000002 D0000000 00000000 9204BDA4 00000080 2204C77F 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Saix</name>
++        <codes>9204BDA4 00000002 2204C77F 00000003 D0000000 00000000 9204BDA4 00000080 2204C77F 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Xaldin</name>
++        <codes>9204BDA4 00000002 2204C77F 00000004 D0000000 00000000 9204BDA4 00000080 2204C77F 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Sora</name>
++        <codes>9204BDA4 00000002 2204C77F 00000005 D0000000 00000000 9204BDA4 00000080 2204C77F 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Demyx</name>
++        <codes>9204BDA4 00000002 2204C77F 00000006 D0000000 00000000 9204BDA4 00000080 2204C77F 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Larxene</name>
++        <codes>9204BDA4 00000002 2204C77F 00000007 D0000000 00000000 9204BDA4 00000080 2204C77F 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Lexaeus</name>
++        <codes>9204BDA4 00000002 2204C77F 00000008 D0000000 00000000 9204BDA4 00000080 2204C77F 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Luxord</name>
++        <codes>9204BDA4 00000002 2204C77F 00000009 D0000000 00000000 9204BDA4 00000080 2204C77F 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Marluxia</name>
++        <codes>9204BDA4 00000002 2204C77F 0000000A D0000000 00000000 9204BDA4 00000080 2204C77F 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Riku</name>
++        <codes>9204BDA4 00000002 2204C77F 0000000B D0000000 00000000 9204BDA4 00000080 2204C77F 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Vexen</name>
++        <codes>9204BDA4 00000002 2204C77F 0000000C D0000000 00000000 9204BDA4 00000080 2204C77F 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Xemnas</name>
++        <codes>9204BDA4 00000002 2204C77F 0000000D D0000000 00000000 9204BDA4 00000080 2204C77F 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Xion</name>
++        <codes>9204BDA4 00000002 2204C77F 0000000E D0000000 00000000 9204BDA4 00000080 2204C77F 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Zexion</name>
++        <codes>9204BDA4 00000002 2204C77F 0000000F D0000000 00000000 9204BDA4 00000080 2204C77F 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Mickey</name>
++        <codes>9204BDA4 00000002 2204C77F 00000010 D0000000 00000000 9204BDA4 00000080 2204C77F 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Donald</name>
++        <codes>9204BDA4 00000002 2204C77F 00000011 D0000000 00000000 9204BDA4 00000080 2204C77F 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Goofy</name>
++        <codes>9204BDA4 00000002 2204C77F 00000012 D0000000 00000000 9204BDA4 00000080 2204C77F 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Dual Wield Roxas</name>
++        <codes>9204BDA4 00000002 2204C77F 00000013 D0000000 00000000 9204BDA4 00000080 2204C77F 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Hooded Roxas</name>
++        <codes>9204BDA4 00000002 2204C77F 00000014 D0000000 00000000 9204BDA4 00000080 2204C77F 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Hooded Xion</name>
++        <codes>9204BDA4 00000002 2204C77F 00000015 D0000000 00000000 9204BDA4 00000080 2204C77F 00000000 D0000000 00000000</codes>
++      </cheat>
++    </folder>
++    <folder>
++      <name>Character 3 Mod Codes (Story Mode)</name>
++      <note>Can Only Be Used on Mission 56, Day 193</note>
++      <allowedon>1</allowedon>
++      <cheat>
++        <name>Roxas</name>
++        <codes>9204BDA4 00000002 2204C883 00000000 D0000000 00000000 9204BDA4 00000080 2204C883 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Axel</name>
++        <codes>9204BDA4 00000002 2204C883 00000001 D0000000 00000000 9204BDA4 00000080 2204C883 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Xigbar</name>
++        <codes>9204BDA4 00000002 2204C883 00000002 D0000000 00000000 9204BDA4 00000080 2204C883 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Saix</name>
++        <codes>9204BDA4 00000002 2204C883 00000003 D0000000 00000000 9204BDA4 00000080 2204C883 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Xaldin</name>
++        <codes>9204BDA4 00000002 2204C883 00000004 D0000000 00000000 9204BDA4 00000080 2204C883 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Sora</name>
++        <codes>9204BDA4 00000002 2204C883 00000005 D0000000 00000000 9204BDA4 00000080 2204C883 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Demyx</name>
++        <codes>9204BDA4 00000002 2204C883 00000006 D0000000 00000000 9204BDA4 00000080 2204C883 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Larxene</name>
++        <codes>9204BDA4 00000002 2204C883 00000007 D0000000 00000000 9204BDA4 00000080 2204C883 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Lexaeus</name>
++        <codes>9204BDA4 00000002 2204C883 00000008 D0000000 00000000 9204BDA4 00000080 2204C883 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Luxord</name>
++        <codes>9204BDA4 00000002 2204C883 00000009 D0000000 00000000 9204BDA4 00000080 2204C883 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Marluxia</name>
++        <codes>9204BDA4 00000002 2204C883 0000000A D0000000 00000000 9204BDA4 00000080 2204C883 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Riku</name>
++        <codes>9204BDA4 00000002 2204C883 0000000B D0000000 00000000 9204BDA4 00000080 2204C883 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Vexen</name>
++        <codes>9204BDA4 00000002 2204C883 0000000C D0000000 00000000 9204BDA4 00000080 2204C883 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Xemnas</name>
++        <codes>9204BDA4 00000002 2204C883 0000000D D0000000 00000000 9204BDA4 00000080 2204C883 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Xion</name>
++        <codes>9204BDA4 00000002 2204C883 0000000E D0000000 00000000 9204BDA4 00000080 2204C883 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Zexion</name>
++        <codes>9204BDA4 00000002 2204C883 0000000F D0000000 00000000 9204BDA4 00000080 2204C883 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Mickey</name>
++        <codes>9204BDA4 00000002 2204C883 00000010 D0000000 00000000 9204BDA4 00000080 2204C883 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Donald</name>
++        <codes>9204BDA4 00000002 2204C883 00000011 D0000000 00000000 9204BDA4 00000080 2204C883 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Goofy</name>
++        <codes>9204BDA4 00000002 2204C883 00000012 D0000000 00000000 9204BDA4 00000080 2204C883 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Dual Wield Roxas</name>
++        <codes>9204BDA4 00000002 2204C883 00000013 D0000000 00000000 9204BDA4 00000080 2204C883 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Hooded Roxas</name>
++        <codes>9204BDA4 00000002 2204C883 00000014 D0000000 00000000 9204BDA4 00000080 2204C883 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Hooded Xion</name>
++        <codes>9204BDA4 00000002 2204C883 00000015 D0000000 00000000 9204BDA4 00000080 2204C883 00000000 D0000000 00000000</codes>
++      </cheat>
++    </folder>
++    <folder>
++      <name>Keyblade/Weapon Mod Codes</name>
++      <note>Changes the appearance and combo of your Keyblade/weapon, you can still install Gears</note>
++      <allowedon>1</allowedon>
++      <cheat>
++        <name>No Gear (Kingdom Key)</name>
++        <codes>2204C67C 00000000 92035A98 00005581 12035A98 000046C0 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>No Gear (Stick)</name>
++        <codes>2204C67C 00000030 92035A98 00005581 12035A98 000046C0 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>No Gear (Grandstander Bat)</name>
++        <codes>2204C67C 0000002E 92035A98 00005581 12035A98 000046C0 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Skill Gear (Missing Ache)</name>
++        <codes>2204C67C 00000001 92035A98 00005581 12035A98 000046C0 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Skill Gear+ (Missing Ache+)</name>
++        <codes>2204C67C 00000002 92035A98 00005581 12035A98 000046C0 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Technical Gear (Ominous Blight)</name>
++        <codes>2204C67C 00000008 92035A98 00005581 12035A98 000046C0 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Technical Gear+ (Ominous Blight+)</name>
++        <codes>2204C67C 00000009 92035A98 00005581 12035A98 000046C0 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Duel Gear (Abaddon Plasma)</name>
++        <codes>2204C67C 00000014 92035A98 00005581 12035A98 000046C0 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Duel Gear+ (Abaddon Plasma+)</name>
++        <codes>2204C67C 00000013 92035A98 00005581 12035A98 000046C0 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Duel Gear++ (Abaddon Plasma++)</name>
++        <codes>2204C67C 0000001D 92035A98 00005581 12035A98 000046C0 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Loaded Gear (Pain of Solitude)</name>
++        <codes>2204C67C 00000003 92035A98 00005581 12035A98 000046C0 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Loaded Gear+ (Pain of Solitude+)</name>
++        <codes>2204C67C 00000004 92035A98 00005581 12035A98 000046C0 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Chrono Gear (Sign of Innocence)</name>
++        <codes>2204C67C 0000000A 92035A98 00005581 12035A98 000046C0 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Chrono Gear+ (Sign of Innocence+)</name>
++        <codes>2204C67C 0000000B 92035A98 00005581 12035A98 000046C0 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Phantom Gear (Crown of Guilt)</name>
++        <codes>2204C67C 00000015 92035A98 00005581 12035A98 000046C0 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Phantom Gear+ (Crown of Guilt+)</name>
++        <codes>2204C67C 00000016 92035A98 00005581 12035A98 000046C0 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Phantom Gear++ (Crown of Guilt++)</name>
++        <codes>2204C67C 0000001E 92035A98 00005581 12035A98 000046C0 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Lift Gear (Abyssal Tide)</name>
++        <codes>2204C67C 0000000E 92035A98 00005581 12035A98 000046C0 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Lift Gear+ (Abyssal Tide+)</name>
++        <codes>2204C67C 0000000F 92035A98 00005581 12035A98 000046C0 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Nimble Gear (Leviathan)</name>
++        <codes>2204C67C 0000001A 92035A98 00005581 12035A98 000046C0 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Nimble Gear+ (Leviathan+)</name>
++        <codes>2204C67C 00000019 92035A98 00005581 12035A98 000046C0 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Wild Gear (True Light's Flight)</name>
++        <codes>2204C67C 00000010 92035A98 00005581 12035A98 000046C0 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Wild Gear+ (True Light's Flight+)</name>
++        <codes>2204C67C 00000011 92035A98 00005581 12035A98 000046C0 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Ominous Gear (Rejection of Fate)</name>
++        <codes>2204C67C 0000001C 92035A98 00005581 12035A98 000046C0 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Ominous Gear+ (Rejection of Fate+)</name>
++        <codes>2204C67C 0000001B 92035A98 00005581 12035A98 000046C0 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Valor Gear (Midnight Roar)</name>
++        <codes>2204C67C 00000005 92035A98 00005581 12035A98 000046C0 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Valor Gear+ (Midnight Roar+)</name>
++        <codes>2204C67C 00000006 92035A98 00005581 12035A98 000046C0 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Fearless Gear (Glimpse of Darkness)</name>
++        <codes>2204C67C 0000000C 92035A98 00005581 12035A98 000046C0 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Fearless Gear+ (Glimpse of Darkness+)</name>
++        <codes>2204C67C 0000000D 92035A98 00005581 12035A98 000046C0 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Prestige Gear (Total Eclipse)</name>
++        <codes>2204C67C 00000018 92035A98 00005581 12035A98 000046C0 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Prestige Gear+ (Total Eclipse+)</name>
++        <codes>2204C67C 00000017 92035A98 00005581 12035A98 000046C0 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Crisis Gear (Silent Dirge)</name>
++        <codes>2204C67C 00000021 92035A98 00005581 12035A98 000046C0 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Crisis Gear+ (Silent Dirge+)</name>
++        <codes>2204C67C 00000022 92035A98 00005581 12035A98 000046C0 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Omega Gear (Lunar Eclipse)</name>
++        <codes>2204C67C 0000002B 92035A98 00005581 12035A98 000046C0 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Omega Gear (Lunar Eclipse+)</name>
++        <codes>2204C67C 0000002A 92035A98 00005581 12035A98 000046C0 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Hazard Gear (Darker Than Dark)</name>
++        <codes>2204C67C 0000001F 92035A98 00005581 12035A98 000046C0 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Hazard Gear+ (Darker Than Dark+)</name>
++        <codes>2204C67C 00000020 92035A98 00005581 12035A98 000046C0 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Rage Gear (Astral Blast)</name>
++        <codes>2204C67C 00000026 92035A98 00005581 12035A98 000046C0 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Rage Gear+ (Astral Blast+)</name>
++        <codes>2204C67C 00000025 92035A98 00005581 12035A98 000046C0 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Champion Gear (Maverick Flare)</name>
++        <codes>2204C67C 00000023 92035A98 00005581 12035A98 000046C0 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Champion Gear+ (Maverick Flare+)</name>
++        <codes>2204C67C 00000024 92035A98 00005581 12035A98 000046C0 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Ultimate Gear (Twilight Blaze)</name>
++        <codes>2204C67C 0000002D 92035A98 00005581 12035A98 000046C0 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Ultimate Gear+ (Twilight Blaze+)</name>
++        <codes>2204C67C 0000002C 92035A98 00005581 12035A98 000046C0 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Pandora's Gear (Omega Weapon)</name>
++        <codes>2204C67C 00000029 92035A98 00005581 12035A98 000046C0 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Pandora's Gear+ (Omega Weapon)</name>
++        <codes>2204C67C 00000028 92035A98 00005581 12035A98 000046C0 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Zero Gear (Kingdom Key+)</name>
++        <codes>2204C67C 00000027 92035A98 00005581 12035A98 000046C0 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Zero Gear (Oathkeeper)</name>
++        <codes>2204C67C 0000002F 92035A98 00005581 12035A98 000046C0 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Zero Gear (Two Become One)</name>
++        <codes>2204C67C 00000031 92035A98 00005581 12035A98 000046C0 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Casual Gear (Umbrella)</name>
++        <codes>2204C67C 00000007 92035A98 00005581 12035A98 000046C0 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Mystery Gear (Aubade)</name>
++        <codes>2204C67C 00000012 92035A98 00005581 12035A98 000046C0 D2000000 00000000</codes>
++      </cheat>
++    </folder>
++    <folder>
++      <name>Backlight Codes</name>
++      <allowedon>1</allowedon>
++      <cheat>
++        <name>Nintendo DS Backlight Control</name>
++        <note>Press and hold L+R+Select then press Up to enable the backlight or Down to disable the backlight.</note>
++        <codes>94000130 FCFB0000 023FE074 012FFF11 E0000000 00000088 E28F0001 E12FFF10 A21CB5F0 88234C1C 80138811 D019428B 25803490 F0002000 1C06F818 420B2140 2180D003 D005420B 210CE00C D1094231 E0044331 4231210C 438ED004 20001C31 F805F000 BC08BCF0 30804718 88222100 D1FC422A 80224A09 88208060 D1FC4228 80220C12 88228061 D1FC422A 21FF8860 47704008 00000000 04000130 80028802 023FE074 E3520003 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Nintendo DS Lite Backlight Control</name>
++        <note>Press and hold L+R+Select then press Up to increase the backlight brightness or Down to decrease the backlight brightness.</note>
++        <codes>94000130 FCFB0000 023FE074 012FFF11 E0000000 000000A8 E28F0001 E12FFF10 A21AB5F0 88234C24 80138811 D02A428B 25803490 F0002000 1C06F82A F0002004 2703F826 21404007 D003420B 420B2180 E018D00C 4231210C 2F03D006 1C79D013 F0002004 E00EF816 E0094331 438E210C 2F001C31 1E79D004 F0002004 E002F80A F0002000 BCF0F806 4718BC08 30800000 88222100 D1FC422A 80224A08 88208060 D1FC4228 80220C12 88228061 D1FC422A 21FF8860 47704008 04000130 80028802 023FE074 E3520003 D2000000 00000000</codes>
++      </cheat>
++    </folder>
++  </game>
++  <game>
++    <name>Kingdom Hearts - 358-2 Days (Japan)</name>
++    <gameid>YKGJ 7F96A5B7</gameid>
++    <date>2025/08/12 19:36</date>
++    <folder>
++      <name>Miscellaneous Codes</name>
++      <allowedon>0</allowedon>
++      <cheat>
++        <name>Max/Infinite Money (Select)</name>
++        <codes>94000130 FFFB0000 02193720 000F423F D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Max Heart Points (Select)</name>
++        <codes>94000130 FFFB0000 02193724 000F423F D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Item Cost 0 Points from Mog Shop</name>
++        <codes>9208C816 0000E1C0 0208C818 E3A02000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>(Read Comment) Enable All Trial Mission (Select)</name>
++        <note>Might affect story line</note>
++        <codes>94000130 FFFB0000 221937B2 00000003 22193EA1 00000073 22193EA2 0000003B C0000000 00000017 02193850 FFFFFFFF DC000000 00000004 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Enable Enemy Report (Select)</name>
++        <codes>94000130 FFFB0000 C0000000 00000072 22194129 00000001 DC000000 00000001 D2000000 00000000</codes>
++      </cheat>
++    </folder>
++    <folder>
++      <name>Mode Selection (Select)</name>
++      <allowedon>1</allowedon>
++      <cheat>
++        <name>Beginner</name>
++        <codes>94000130 FFFB0000 221937AA 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Standard</name>
++        <codes>94000130 FFFB0000 221937AA 00000010 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Proud</name>
++        <codes>94000130 FFFB0000 221937AA 00000020 D0000000 00000000</codes>
++      </cheat>
++    </folder>
++    <folder>
++      <name>Mission Rank Codes (Select)</name>
++      <note>Used at Own Risk</note>
++      <allowedon>1</allowedon>
++      <cheat>
++        <name>Legend</name>
++        <codes>94000130 FFFB0000 021937B0 00030000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Expert</name>
++        <codes>94000130 FFFB0000 021937B0 00020000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Rookie</name>
++        <codes>94000130 FFFB0000 021937B0 00010000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Novice</name>
++        <codes>94000130 FFFB0000 021937B0 0004FFFF D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Xemnas</name>
++        <codes>94000130 FFFB0000 021937B0 0003FFFF D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Master</name>
++        <codes>94000130 FFFB0000 021937B0 0002FFFF D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Agent</name>
++        <codes>94000130 FFFB0000 021937B0 0001FFFF D0000000 00000000</codes>
++      </cheat>
++    </folder>
++    <folder>
++      <name>Mission Related Codes</name>
++      <note>Might Not Work On All Missions</note>
++      <allowedon>0</allowedon>
++      <cheat>
++        <name>Time Never Increase</name>
++        <codes>9206F800 0000C020 0206F804 E3A0000B D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Instant Mission Complete</name>
++        <note>Have Effects on Normal Mission</note>
++        <codes>9206A07C 00002100 1206A07E 000020C8 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Mission Gauge Max When Increase</name>
++        <note>Have Effects on Normal Mission</note>
++        <codes>9206C702 0000E595 0206C704 E3A010C8 D0000000 00000000</codes>
++      </cheat>
++    </folder>
++    <folder>
++      <name>Records for Mission - Crown Symbols</name>
++      <allowedon>1</allowedon>
++      <cheat>
++        <name>Crown Symbol 99 (Select)</name>
++        <codes>94000130 FFFB0000 12195080 00000063 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Crown Symbol 999 (Select)</name>
++        <codes>94000130 FFFB0000 12195080 000003E7 D2000000 00000000</codes>
++      </cheat>
++    </folder>
++    <folder>
++      <name>Records for Mission - Nobody Symbols</name>
++      <allowedon>1</allowedon>
++      <cheat>
++        <name>Nobody Symbol 99 (Select)</name>
++        <codes>94000130 FFFB0000 12195082 00000063 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Nobody Symbol 999 (Select)</name>
++        <codes>94000130 FFFB0000 12195082 000003E7 D2000000 00000000</codes>
++      </cheat>
++    </folder>
++    <folder>
++      <name>Unlock Character Codes</name>
++      <allowedon>0</allowedon>
++      <cheat>
++        <name>Mickey (Select)</name>
++        <codes>94000130 FFFB0000 221940F1 0000000F D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Sora (Select)</name>
++        <codes>94000130 FFFB0000 221940F0 0000000F D0000000 00000000</codes>
++      </cheat>
++    </folder>
++    <folder>
++      <name>Character 1 Mod Codes (Story Mode)</name>
++      <allowedon>1</allowedon>
++      <cheat>
++        <name>Roxas</name>
++        <codes>9204C1E4 00000002 2204CA8F 00000000 D0000000 00000000 9204C1E4 00000080 2204CA8F 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Axel</name>
++        <codes>9204C1E4 00000002 2204CA8F 00000001 D0000000 00000000 9204C1E4 00000080 2204CA8F 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Xigbar</name>
++        <codes>9204C1E4 00000002 2204CA8F 00000002 D0000000 00000000 9204C1E4 00000080 2204CA8F 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Saix</name>
++        <codes>9204C1E4 00000002 2204CA8F 00000003 D0000000 00000000 9204C1E4 00000080 2204CA8F 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Xaldin</name>
++        <codes>9204C1E4 00000002 2204CA8F 00000004 D0000000 00000000 9204C1E4 00000080 2204CA8F 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Sora</name>
++        <codes>9204C1E4 00000002 2204CA8F 00000005 D0000000 00000000 9204C1E4 00000080 2204CA8F 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Demyx</name>
++        <codes>9204C1E4 00000002 2204CA8F 00000006 D0000000 00000000 9204C1E4 00000080 2204CA8F 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Larxene</name>
++        <codes>9204C1E4 00000002 2204CA8F 00000007 D0000000 00000000 9204C1E4 00000080 2204CA8F 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Lexaeus</name>
++        <codes>9204C1E4 00000002 2204CA8F 00000008 D0000000 00000000 9204C1E4 00000080 2204CA8F 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Luxord</name>
++        <codes>9204C1E4 00000002 2204CA8F 00000009 D0000000 00000000 9204C1E4 00000080 2204CA8F 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Marluxia</name>
++        <codes>9204C1E4 00000002 2204CA8F 0000000A D0000000 00000000 9204C1E4 00000080 2204CA8F 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Riku</name>
++        <codes>9204C1E4 00000002 2204CA8F 0000000B D0000000 00000000 9204C1E4 00000080 2204CA8F 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Vexen</name>
++        <codes>9204C1E4 00000002 2204CA8F 0000000C D0000000 00000000 9204C1E4 00000080 2204CA8F 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Xemnas</name>
++        <codes>9204C1E4 00000002 2204CA8F 0000000D D0000000 00000000 9204C1E4 00000080 2204CA8F 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Xion</name>
++        <codes>9204C1E4 00000002 2204CA8F 0000000E D0000000 00000000 9204C1E4 00000080 2204CA8F 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Zexion</name>
++        <codes>9204C1E4 00000002 2204CA8F 0000000F D0000000 00000000 9204C1E4 00000080 2204CA8F 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Mickey</name>
++        <codes>9204C1E4 00000002 2204CA8F 00000010 D0000000 00000000 9204C1E4 00000080 2204CA8F 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Donald</name>
++        <codes>9204C1E4 00000002 2204CA8F 00000011 D0000000 00000000 9204C1E4 00000080 2204CA8F 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Goofy</name>
++        <codes>9204C1E4 00000002 2204CA8F 00000012 D0000000 00000000 9204C1E4 00000080 2204CA8F 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Dual Wield Roxas</name>
++        <codes>9204C1E4 00000002 2204CA8F 00000013 D0000000 00000000 9204C1E4 00000080 2204CA8F 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Single Wield Roxas</name>
++        <codes>9204C1E4 00000002 2204CA8F 00000014 D0000000 00000000 9204C1E4 00000080 2204CA8F 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Hooded Xion</name>
++        <codes>9204C1E4 00000002 2204CA8F 00000015 D0000000 00000000 9204C1E4 00000080 2204CA8F 00000000 D0000000 00000000</codes>
++      </cheat>
++    </folder>
++    <folder>
++      <name>Character 2 Mod Codes (Story Mode)</name>
++      <allowedon>1</allowedon>
++      <cheat>
++        <name>Roxas</name>
++        <codes>9204C1E4 00000002 2204CB93 00000000 D0000000 00000000 9204C1E4 00000080 2204CB93 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Axel</name>
++        <codes>9204C1E4 00000002 2204CB93 00000001 D0000000 00000000 9204C1E4 00000080 2204CB93 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Xigbar</name>
++        <codes>9204C1E4 00000002 2204CB93 00000002 D0000000 00000000 9204C1E4 00000080 2204CB93 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Saix</name>
++        <codes>9204C1E4 00000002 2204CB93 00000003 D0000000 00000000 9204C1E4 00000080 2204CB93 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Xaldin</name>
++        <codes>9204C1E4 00000002 2204CB93 00000004 D0000000 00000000 9204C1E4 00000080 2204CB93 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Sora</name>
++        <codes>9204C1E4 00000002 2204CB93 00000005 D0000000 00000000 9204C1E4 00000080 2204CB93 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Demyx</name>
++        <codes>9204C1E4 00000002 2204CB93 00000006 D0000000 00000000 9204C1E4 00000080 2204CB93 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Larxene</name>
++        <codes>9204C1E4 00000002 2204CB93 00000007 D0000000 00000000 9204C1E4 00000080 2204CB93 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Lexaeus</name>
++        <codes>9204C1E4 00000002 2204CB93 00000008 D0000000 00000000 9204C1E4 00000080 2204CB93 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Luxord</name>
++        <codes>9204C1E4 00000002 2204CB93 00000009 D0000000 00000000 9204C1E4 00000080 2204CB93 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Marluxia</name>
++        <codes>9204C1E4 00000002 2204CB93 0000000A D0000000 00000000 9204C1E4 00000080 2204CB93 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Riku</name>
++        <codes>9204C1E4 00000002 2204CB93 0000000B D0000000 00000000 9204C1E4 00000080 2204CB93 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Vexen</name>
++        <codes>9204C1E4 00000002 2204CB93 0000000C D0000000 00000000 9204C1E4 00000080 2204CB93 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Xemnas</name>
++        <codes>9204C1E4 00000002 2204CB93 0000000D D0000000 00000000 9204C1E4 00000080 2204CB93 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Xion</name>
++        <codes>9204C1E4 00000002 2204CB93 0000000E D0000000 00000000 9204C1E4 00000080 2204CB93 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Zexion</name>
++        <codes>9204C1E4 00000002 2204CB93 0000000F D0000000 00000000 9204C1E4 00000080 2204CB93 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Mickey</name>
++        <codes>9204C1E4 00000002 2204CB93 00000010 D0000000 00000000 9204C1E4 00000080 2204CB93 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Donald</name>
++        <codes>9204C1E4 00000002 2204CB93 00000011 D0000000 00000000 9204C1E4 00000080 2204CB93 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Goofy</name>
++        <codes>9204C1E4 00000002 2204CB93 00000012 D0000000 00000000 9204C1E4 00000080 2204CB93 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Dual Wield Roxas</name>
++        <codes>9204C1E4 00000002 2204CB93 00000013 D0000000 00000000 9204C1E4 00000080 2204CB93 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Single Wield Roxas</name>
++        <codes>9204C1E4 00000002 2204CB93 00000014 D0000000 00000000 9204C1E4 00000080 2204CB93 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Hooded Xion</name>
++        <codes>9204C1E4 00000002 2204CB93 00000015 D0000000 00000000 9204C1E4 00000080 2204CB93 00000000 D0000000 00000000</codes>
++      </cheat>
++    </folder>
++    <folder>
++      <name>Character 3 Mod Codes (Story Mode)</name>
++      <note>Can Only Be Used on Mission 56, Day 193</note>
++      <allowedon>1</allowedon>
++      <cheat>
++        <name>Roxas</name>
++        <codes>9204C1E4 00000002 2204CC97 00000000 D0000000 00000000 9204C1E4 00000080 2204CC97 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Axel</name>
++        <codes>9204C1E4 00000002 2204CC97 00000001 D0000000 00000000 9204C1E4 00000080 2204CC97 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Xigbar</name>
++        <codes>9204C1E4 00000002 2204CC97 00000002 D0000000 00000000 9204C1E4 00000080 2204CC97 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Saix</name>
++        <codes>9204C1E4 00000002 2204CC97 00000003 D0000000 00000000 9204C1E4 00000080 2204CC97 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Xaldin</name>
++        <codes>9204C1E4 00000002 2204CC97 00000004 D0000000 00000000 9204C1E4 00000080 2204CC97 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Sora</name>
++        <codes>9204C1E4 00000002 2204CC97 00000005 D0000000 00000000 9204C1E4 00000080 2204CC97 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Demyx</name>
++        <codes>9204C1E4 00000002 2204CC97 00000006 D0000000 00000000 9204C1E4 00000080 2204CC97 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Larxene</name>
++        <codes>9204C1E4 00000002 2204CC97 00000007 D0000000 00000000 9204C1E4 00000080 2204CC97 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Lexaeus</name>
++        <codes>9204C1E4 00000002 2204CC97 00000008 D0000000 00000000 9204C1E4 00000080 2204CC97 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Luxord</name>
++        <codes>9204C1E4 00000002 2204CC97 00000009 D0000000 00000000 9204C1E4 00000080 2204CC97 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Marluxia</name>
++        <codes>9204C1E4 00000002 2204CC97 0000000A D0000000 00000000 9204C1E4 00000080 2204CC97 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Riku</name>
++        <codes>9204C1E4 00000002 2204CC97 0000000B D0000000 00000000 9204C1E4 00000080 2204CC97 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Vexen</name>
++        <codes>9204C1E4 00000002 2204CC97 0000000C D0000000 00000000 9204C1E4 00000080 2204CC97 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Xemnas</name>
++        <codes>9204C1E4 00000002 2204CC97 0000000D D0000000 00000000 9204C1E4 00000080 2204CC97 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Xion</name>
++        <codes>9204C1E4 00000002 2204CC97 0000000E D0000000 00000000 9204C1E4 00000080 2204CC97 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Zexion</name>
++        <codes>9204C1E4 00000002 2204CC97 0000000F D0000000 00000000 9204C1E4 00000080 2204CC97 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Mickey</name>
++        <codes>9204C1E4 00000002 2204CC97 00000010 D0000000 00000000 9204C1E4 00000080 2204CC97 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Donald</name>
++        <codes>9204C1E4 00000002 2204CC97 00000011 D0000000 00000000 9204C1E4 00000080 2204CC97 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Goofy</name>
++        <codes>9204C1E4 00000002 2204CC97 00000012 D0000000 00000000 9204C1E4 00000080 2204CC97 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Dual Wield Roxas</name>
++        <codes>9204C1E4 00000002 2204CC97 00000013 D0000000 00000000 9204C1E4 00000080 2204CC97 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Single Wield Roxas</name>
++        <codes>9204C1E4 00000002 2204CC97 00000014 D0000000 00000000 9204C1E4 00000080 2204CC97 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Hooded Xion</name>
++        <codes>9204C1E4 00000002 2204CC97 00000015 D0000000 00000000 9204C1E4 00000080 2204CC97 00000000 D0000000 00000000</codes>
++      </cheat>
++    </folder>
++    <folder>
++      <name>Item Codes</name>
++      <allowedon>0</allowedon>
++      <cheat>
++        <name>Max Item Slot (Select)</name>
++        <codes>94000130 FFFB0000 22193F29 000000FF D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Recovery Item (Select)</name>
++        <codes>94000130 FFFB0000 12193F2A 00006363 02193F2C 63636363 02193F30 63636363 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>All Skills (Select)</name>
++        <codes>94000130 FFFB0000 22193FB4 00000063 12193FB6 00006363 12193FCC 00006363 12193FDC 00006363 22193FDE 00000063 22193FE3 00000063 12193FE4 00006363 22193F9D 00000063 12193F9E 00006363 C0000000 00000004 02193FA0 63636363 02193FB8 63636363 DC000000 00000004 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>All Spell/Magic Upgrades (Select)</name>
++        <codes>94000130 FFFB0000 12193F86 00006363 22193F85 00000063 22193F9C 00000063 221940E7 00000063 121940E8 00006363 C0000000 00000004 02193F88 63636363 DC000000 00000004 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Backpack Expantion Item (Select)</name>
++        <codes>94000130 FFFB0000 22193F83 00000063 22193F84 00000063 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>All Upgrades (Select)</name>
++        <codes>94000130 FFFB0000 22193F67 00000063 02193F68 63636363 02193F6C 63636363 221940ED 00000063 121940EE 00006363 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>All Accessories (Select)</name>
++        <codes>94000130 FFFB0000 121940F2 00006363 C0000000 0000000C 021940F4 63636363 DC000000 00000004 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>All Spell Recipies, Mineral Stones (Select)</name>
++        <codes>94000130 FFFB0000 22193F35 00000063 22193F37 00000063 12193F38 00006363 22193F3B 00000063 12193F3C 00006363 22193F3F 00000063 22193F40 00000063 22194023 00000063 12194048 00006363 2219404A 00000063 12194052 00006363 22194054 00000063 22194059 00000063 2219405A 00000063 1219405E 00006363 02194060 63636363 02194064 63636363 12194068 00006363 2219406B 00000063 12194032 00006363 02194034 63636363 02194038 63636363 0219403C 63636363 121940E2 00006363 121940E4 00006363 221940E6 00000062 C0000000 00000008 02194024 63636363 DC000000 00000004 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>All Keys (Select)</name>
++        <codes>94000130 FFFB0000 22194014 00000063 22194019 00000063 2219401F 00000063 12194020 00006363 22194022 00000063 C0000000 0000000A 02193FE8 63636363 DC000000 00000004 D2000000 00000000</codes>
++      </cheat>
++    </folder>
++    <folder>
++      <name>Battle Codes</name>
++      <allowedon>0</allowedon>
++      <cheat>
++        <name>Chain 9999 (Select)</name>
++        <note>Need a screen refresh to see the changes</note>
++        <codes>94000130 FFFB0000 021A7444 0000270F D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>HP Never Decrease</name>
++        <codes>020AC720 E1A00000</codes>
++      </cheat>
++      <cheat>
++        <name>Chain Never Break</name>
++        <codes>9209BCEE 0000E584 0209BCF0 E3A00001 0209BE08 E3A000FF D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Limit Break Anytime</name>
++        <note>Might freeze</note>
++        <codes>9209448E 00001A00 02094490 E3A00001 1209497E 0000E3A0 02096FF8 EA000002 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Limit Break (R+Up ON, R+Down OFF)</name>
++        <note>Might freeze (R+Up ON, R+Down OFF)</note>
++        <codes>52094B64 EB00023D 02094980 E3A00001 D0000000 00000000 52094B64 EB00023D 94000130 FEBF0000 02095034 EA00000F D2000000 00000000 94000130 FE7F0000 02095034 0A00000F D2000000 00000000</codes>
++      </cheat>
++    </folder>
++    <folder>
++      <name>Movement Codes</name>
++      <allowedon>0</allowedon>
++      <cheat>
++        <name>Infinite Jump</name>
++        <codes>520A6220 EA00004D E2000100 00000030 EB008EB6 E5900004 E5900020 E1500005 1A029891 E5950018 E3100002 11A00005 13A01001 1B028BED EA02988B E1A00000 52000100 EB008EB6 020A6220 EAFD67B6 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Hold Y for Walkthrough</name>
++        <codes>0202DC94 EBFFFA7E 94000136 FFFD0000 0202DC94 E1A00000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Hold R+B to Float at Highest Point</name>
++        <codes>94000130 FEFD0000 620B5040 00000000 B20B5040 00000000 10000058 0000FFFF D2000000 00000000</codes>
++      </cheat>
++    </folder>
++    <folder>
++      <name>Speed Modifier Codes</name>
++      <allowedon>1</allowedon>
++      <cheat>
++        <name>Speed x 1.5</name>
++        <codes>520AC810 E1A04001 020AC810 E3A04B06 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Speed x 2</name>
++        <codes>520AC810 E1A04001 020AC810 E1A04081 D0000000 00000000</codes>
++      </cheat>
++    </folder>
++    <folder>
++      <name>Experience Multiplier Codes</name>
++      <allowedon>1</allowedon>
++      <cheat>
++        <name>x2</name>
++        <codes>5206A708 030CB538 0206A708 034CB538 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>x4</name>
++        <codes>5206A708 030CB538 0206A708 038CB538 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>x8</name>
++        <codes>5206A708 030CB538 0206A708 03CCB538 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>x16</name>
++        <codes>5206A708 030CB538 0206A708 040CB538 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>x32</name>
++        <codes>5206A708 030CB538 0206A708 044CB538 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>x64</name>
++        <codes>5206A708 030CB538 0206A708 048CB538 D0000000 00000000</codes>
++      </cheat>
++    </folder>
++    <folder>
++      <name>Money Multiplier</name>
++      <allowedon>1</allowedon>
++      <cheat>
++        <name>x2</name>
++        <codes>5206A7C0 482F6981 0206A7C0 00406980 1206A7C4 00006148 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>x4</name>
++        <codes>5206A7C0 482F6981 0206A7C0 00806980 1206A7C4 00006148 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>x8</name>
++        <codes>5206A7C0 482F6981 0206A7C0 00C06980 1206A7C4 00006148 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>x16</name>
++        <codes>5206A7C0 482F6981 0206A7C0 01006980 1206A7C4 00006148 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>x32</name>
++        <codes>5206A7C0 482F6981 0206A7C0 01406980 1206A7C4 00006148 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>x64</name>
++        <codes>5206A7C0 482F6981 0206A7C0 01806980 1206A7C4 00006148 D0000000 00000000</codes>
++      </cheat>
++    </folder>
++    <folder>
++      <name>Jump Multiplier</name>
++      <allowedon>1</allowedon>
++      <cheat>
++        <name>x2</name>
++        <codes>92097AB6 0000E585 12097AB8 00000EC6 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>x4</name>
++        <codes>92097AB6 0000E585 12097AB8 00000D63 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>x8</name>
++        <codes>92097AB6 0000E585 12097AB8 00000DC6 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>x16</name>
++        <codes>92097AB6 0000E585 12097AB8 00000C63 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>x32</name>
++        <codes>92097AB6 0000E585 12097AB8 00000CC6 D0000000 00000000</codes>
++      </cheat>
++    </folder>
++    <folder>
++      <name>Exp/Heart/Money Multiplier</name>
++      <allowedon>1</allowedon>
++      <cheat>
++        <name>x2</name>
++        <codes>9206C3BA 0000E791 1206C3BC 00003086 0206C3C0 EA00000C D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>x4</name>
++        <codes>9206C3BA 0000E791 1206C3BC 00003106 0206C3C0 EA00000C D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>x8</name>
++        <codes>9206C3BA 0000E791 1206C3BC 00003186 0206C3C0 EA00000C D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>x16</name>
++        <codes>9206C3BA 0000E791 1206C3BC 00003206 0206C3C0 EA00000C D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>x32</name>
++        <codes>9206C3BA 0000E791 1206C3BC 00003286 0206C3C0 EA00000C D0000000 00000000</codes>
++      </cheat>
++    </folder>
++    <folder>
++      <name>Backlight Codes</name>
++      <allowedon>1</allowedon>
++      <cheat>
++        <name>Nintendo DS Backlight Control</name>
++        <note>Press and hold L+R+Select then press Up to enable the backlight or Down to disable the backlight.</note>
++        <codes>94000130 FCFB0000 023FE074 012FFF11 E0000000 00000088 E28F0001 E12FFF10 A21CB5F0 88234C1C 80138811 D019428B 25803490 F0002000 1C06F818 420B2140 2180D003 D005420B 210CE00C D1094231 E0044331 4231210C 438ED004 20001C31 F805F000 BC08BCF0 30804718 88222100 D1FC422A 80224A09 88208060 D1FC4228 80220C12 88228061 D1FC422A 21FF8860 47704008 00000000 04000130 80028802 023FE074 E3520003 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Nintendo DS Lite Backlight Control</name>
++        <note>Press and hold L+R+Select then press Up to increase the backlight brightness or Down to decrease the backlight brightness.</note>
++        <codes>94000130 FCFB0000 023FE074 012FFF11 E0000000 000000A8 E28F0001 E12FFF10 A21AB5F0 88234C24 80138811 D02A428B 25803490 F0002000 1C06F82A F0002004 2703F826 21404007 D003420B 420B2180 E018D00C 4231210C 2F03D006 1C79D013 F0002004 E00EF816 E0094331 438E210C 2F001C31 1E79D004 F0002004 E002F80A F0002000 BCF0F806 4718BC08 30800000 88222100 D1FC422A 80224A08 88208060 D1FC4228 80220C12 88228061 D1FC422A 21FF8860 47704008 04000130 80028802 023FE074 E3520003 D2000000 00000000</codes>
++      </cheat>
++    </folder>
++  </game>
++  <game>
++    <name>Kingdom Hearts - 358-2 Days (USA)</name>
++    <gameid>YKGE 826DCE31</gameid>
++    <date>2025/08/12 19:36</date>
++    <folder>
++      <name>Miscellaneous Codes</name>
++      <allowedon>0</allowedon>
++      <cheat>
++        <name>Max/Infinite Money (Select)</name>
++        <codes>94000130 FFFB0000 021945C0 000F423F D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Item Cost 0 Points from Mog Shop</name>
++        <codes>9208CF62 0000E1C0 0208CF64 E3A02000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Max Heart Points (Select)</name>
++        <codes>94000130 FFFB0000 021945C4 000F423F D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Enable Enemy Report (Select)</name>
++        <codes>94000130 FFFB0000 C0000000 00000072 22194FC9 00000001 DC000000 00000001 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>(Read Comment) Enable All Trial Mission (Select)</name>
++        <note>Might affect story line</note>
++        <codes>94000130 FFFB0000 22194652 00000003 22194D41 00000073 22194D42 0000003B C0000000 00000017 021946F0 FFFFFFFF DC000000 00000004 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Max Mission Points</name>
++        <note>Obtained in Mission Mode only</note>
++        <codes>121A7FF8 0000270F</codes>
++      </cheat>
++      <cheat>
++        <name>All Missions and Diary Logs (Select)</name>
++        <note>Diary Logs contain 'spoilers' that reveal key story elements.</note>
++        <codes>94000130 FFFB0000 221945CB 000000FF D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Widescreen</name>
++        <codes>02023C9C 00001C72</codes>
++      </cheat>
++    </folder>
++    <folder>
++      <name>Mode Selection (Select)</name>
++      <allowedon>1</allowedon>
++      <cheat>
++        <name>Beginner</name>
++        <codes>94000130 FFFB0000 2219464A 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Standard</name>
++        <codes>94000130 FFFB0000 2219464A 00000010 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Proud</name>
++        <codes>94000130 FFFB0000 2219464A 00000020 D0000000 00000000</codes>
++      </cheat>
++    </folder>
++    <folder>
++      <name>Mission Rank Codes (Select)</name>
++      <note>Used at Own Risk</note>
++      <allowedon>1</allowedon>
++      <cheat>
++        <name>Legend</name>
++        <codes>94000130 FFFB0000 02194650 00030000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Expert</name>
++        <codes>94000130 FFFB0000 02194650 00020000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Rookie</name>
++        <codes>94000130 FFFB0000 02194650 00010000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Novice</name>
++        <codes>94000130 FFFB0000 02194650 0004FFFF D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Xemnas</name>
++        <codes>94000130 FFFB0000 02194650 0003FFFF D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Master</name>
++        <codes>94000130 FFFB0000 02194650 0002FFFF D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Agent</name>
++        <codes>94000130 FFFB0000 02194650 0001FFFF D0000000 00000000</codes>
++      </cheat>
++    </folder>
++    <folder>
++      <name>Mission Related Codes</name>
++      <note>Might Not Work On All Missions</note>
++      <allowedon>0</allowedon>
++      <cheat>
++        <name>Time Never Increase</name>
++        <codes>9206F7E0 0000C020 0206F7E4 E3A0000B D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Time Never Increase v2</name>
++        <note>L+R+Up=ON, L+R+Down =OFF)</note>
++        <codes>94000130 FCBF0000 5206F7E4 E0800001 0206F7E4 E3A0000B D2000000 00000000 94000130 FC7F0000 5206F7E4 E3A0000B 0206F7E4 E0800001 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Grandstander Minigame Never Ends (X+Y+Up/Down = ON/OFF)</name>
++        <codes>94000130 FFBF0000 94000136 FFFC0000 520CD08C E1C427B0 020CD08C E1A00000 D2000000 00000000 94000130 FF7F0000 94000136 FFFC0000 520CD08C E1A00000 020CD08C E1C427B0 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Instant Mission Complete</name>
++        <note>Have Effects on Normal Mission</note>
++        <codes>92069FCC 00002100 12069FCE 000020C8 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Mission Gauge Max When Increase</name>
++        <note>Have Effects on Normal Mission</note>
++        <codes>9206C652 0000E595 0206C654 E3A010C8 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Organization Emblem Rings Never Shrink</name>
++        <codes>520804BC E58012B8 52080504 E1822A01 5208050C 158021EC 52080510 158021E8 52080514 158021E4 020804BC E1A00000 02080504 E3A02A05 0208050C E58021EC 02080510 E58021E8 02080514 E58021E4 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Always Triple Mission Rewards</name>
++        <codes>52057E3C E5C80068 2205B8A4 00000003 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Always Three Challenge Sigils</name>
++        <note>Doesn't work for all Challenges, for time-based Challenges use Time Never Increase</note>
++        <codes>5206CD54 E0820000 0206CD54 E1A00000 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Play as Partner (Story Mode)</name>
++        <note>Do NOT use with Character modifier!</note>
++        <codes>9204BD84 00000002 920429FC 00000201 9204C65B FF000000 DA000000 0204C75F D7000000 0204C65B 2204C75D 00000000 D2000000 00000000 9204BD84 00000080 2204C65B 00000000 2204C75F 00000000 D0000000 00000000</codes>
++      </cheat>
++    </folder>
++    <folder>
++      <name>Records for Mission - Crown Symbols</name>
++      <note>Crown Symbols are for Multiplayer Missions</note>
++      <allowedon>1</allowedon>
++      <cheat>
++        <name>Crown Symbol 99 (Select)</name>
++        <codes>94000130 FFFB0000 12195F20 00000063 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Crown Symbol 358 (Select)</name>
++        <codes>94000130 FFFB0000 12195F20 00000166 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Crown Symbol 999 (Select)</name>
++        <codes>94000130 FFFB0000 12195F20 000003E7 D2000000 00000000</codes>
++      </cheat>
++    </folder>
++    <folder>
++      <name>Records for Mission - Nobody Symbols</name>
++      <note>Nobody Symbols are for Challenges</note>
++      <allowedon>1</allowedon>
++      <cheat>
++        <name>Nobody Symbol 99 (Select)</name>
++        <codes>94000130 FFFB0000 12195F22 00000063 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Nobody Symbol 255 (Select)</name>
++        <codes>94000130 FFFB0000 12195F22 000000FF D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Nobody Symbol 999 (Select)</name>
++        <codes>94000130 FFFB0000 12195F22 000003E7 D2000000 00000000</codes>
++      </cheat>
++    </folder>
++    <folder>
++      <name>Unlock Character Codes</name>
++      <allowedon>0</allowedon>
++      <cheat>
++        <name>Mickey (Select)</name>
++        <codes>94000130 FFFB0000 22194F91 0000000F D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Sora (Select)</name>
++        <codes>94000130 FFFB0000 22194F90 0000000F D0000000 00000000</codes>
++      </cheat>
++    </folder>
++    <folder>
++      <name>Movement Codes</name>
++      <allowedon>0</allowedon>
++      <cheat>
++        <name>Hold Y for Walkthrough</name>
++        <codes>0202DCA4 EBFFFA7E 94000136 FFFD0000 0202DCA4 E1A00000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Hold R+B to Float at Highest Point</name>
++        <codes>94000130 FEFD0000 620B59E0 00000000 B20B59E0 00000000 10000058 0000FFFF D2000000 00000000</codes>
++      </cheat>
++    </folder>
++    <folder>
++      <name>Panel Codes</name>
++      <allowedon>0</allowedon>
++      <cheat>
++        <name>Max Panel Slots (Select)</name>
++        <codes>94000130 FFFB0000 22194DC9 00000069 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>All Item Panels (Select)</name>
++        <codes>94000130 FFFB0000 12194DCA 00006363 02194DCC 63636363 02194DD0 63636363 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>All Support Panels (Select)</name>
++        <codes>94000130 FFFB0000 22194E07 00000063 02194E08 63636363 02194E0C 63636363 22194F8D 00000063 12194F8E 00006363 22194E23 00000063 22194E24 00000063 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>All Magic Panels (Select)</name>
++        <codes>94000130 FFFB0000 12194E26 00006363 22194E25 00000063 22194E3C 00000063 C0000000 00000004 02194E28 63636363 DC000000 00000004 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>All Ability Panels (Select)</name>
++        <codes>94000130 FFFB0000 22194E54 00000063 12194E56 00006363 12194E5C 00006363 12194E7C 00006363 22194E7E 00000063 22194E83 00000063 12194E84 00006363 22194E3D 00000063 12194E3E 00006363 22194F87 00000063 12194F88 00006363 12194E6C 00006363 22194E86 00000063 C0000000 00000004 02194E40 63636363 02194E58 63636363 DC000000 00000004 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>All Weapon Panels (Select)</name>
++        <codes>94000130 FFFB0000 22194EB4 00000063 22194EB9 00000063 22194EBF 00000063 12194EC0 00006363 22194EC2 00000063 C0000000 0000000A 02194E88 63636363 DC000000 00000004 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>All Ring Panels (Select)</name>
++        <codes>94000130 FFFB0000 12194F92 00006363 C0000000 0000000C 02194F94 63636363 DC000000 00000004 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>All Material Panels (Select)</name>
++        <codes>94000130 FFFB0000 22194DD5 00000063 22194DD7 00000063 12194DD8 00006363 22194DDB 00000063 12194DDC 00006363 22194DDF 00000063 22194EC3 00000063 12194EE8 00006363 22194EEA 00000063 12194EF2 00006363 22194EF4 00000063 22194EF9 00000063 22194EFA 00000063 12194EFE 00006363 02194F00 63636363 02194F04 63636363 12194F08 00006363 22194F0B 00000063 12194ED2 00006363 02194ED4 63636363 02194ED8 63636363 02194EDC 63636363 C0000000 00000008 02194EC4 63636363 DC000000 00000004 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Install Multiple Ability/Ring Panels</name>
++        <codes>520924A4 0A000012 020924A4 EA000012 D2000000 00000000 5205FF54 0A000012 0205FF54 EA000012 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Install Multiple Weapon Panels</name>
++        <note>Game uses last Weapon Panel it reads for weapon</note>
++        <codes>52092540 0A00000B 02092540 EA00000B D2000000 00000000 5205FFF0 0A00000B 0205FFF0 EA00000B D2000000 00000000</codes>
++      </cheat>
++    </folder>
++    <folder>
++      <name>Battle Codes</name>
++      <allowedon>0</allowedon>
++      <cheat>
++        <name>Chain 9999 (Select)</name>
++        <note>Need a screen refresh to see the changes</note>
++        <codes>94000130 FFFB0000 021A7FE4 0000270F D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>HP Never Decrease</name>
++        <note>Might affect your partners</note>
++        <codes>920ACDB2 0000B3A0 020ACDB4 E1A00000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Chain Never Break</name>
++        <codes>9209C052 0000E584 0209C054 E3A00001 0209C16C E3A000FF D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Limit Break Anytime</name>
++        <note>Might freeze</note>
++        <codes>920946F6 00001A00 020946F8 E3A00001 12094BE6 0000E3A0 02097260 EA000002 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Limit Break (R+Up ON, R+Down OFF)</name>
++        <note>Might freeze (R+Up ON, R+Down OFF)</note>
++        <codes>52094DCC EB00023D 02094BE8 E3A00001 D0000000 00000000 52094DCC EB00023D 94000130 FEBF0000 0209529C EA00000F D2000000 00000000 52094DCC EB00023D 94000130 FE7F0000 0209529C 0A00000F D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Magic Never Decreases</name>
++        <codes>920357C8 0000700A 120357C8 000046C0 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Raise Magic Maximum</name>
++        <note>Use Ethers to replenish Magic</note>
++        <codes>C0000000 0000000E 2204C6F5 00000063 DC000000 00000002 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Xigbar Infinite Bullets</name>
++        <codes>52090B88 E5C40018 02090B88 E1A00000 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>1-Hit Kill (Start+Select+Up/Down for ON/OFF)</name>
++        <note>Does not work on every enemy, may not work on bosses</note>
++        <codes>94000130 FFB30000 520C8DAC E2800B02 520C8DB0 E0880640 020C8DAC E3A00CFF 020C8DB0 E28000FF D2000000 00000000 94000130 FF730000 520C8DAC E3A00CFF 520C8DB0 E28000FF 020C8DAC E2800B02 020C8DB0 E0880640 D2000000 00000000</codes>
++      </cheat>
++    </folder>
++    <folder>
++      <name>Speed Modifier Codes</name>
++      <allowedon>1</allowedon>
++      <cheat>
++        <name>Speed x 1.5</name>
++        <codes>520ACEA4 E1A04001 020ACEA4 E3A04B06 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Speed x 2</name>
++        <codes>520ACEA4 E1A04001 020ACEA4 E1A04081 D0000000 00000000</codes>
++      </cheat>
++    </folder>
++    <folder>
++      <name>Mission Experience Codes</name>
++      <allowedon>1</allowedon>
++      <cheat>
++        <name>100 EXP After Battle</name>
++        <codes>52042418 00000000 2205B878 00000064 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>200 EXP After Battle</name>
++        <codes>52042418 00000000 2205B878 000000C8 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>300 EXP After Battle</name>
++        <codes>52042418 00000000 1205B878 0000012C D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>400 EXP After Battle</name>
++        <codes>52042418 00000000 1205B878 00000190 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>500 EXP After Battle</name>
++        <codes>52042418 00000000 1205B878 000001F4 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>1000 EXP After Battle</name>
++        <codes>52042418 00000000 1205B878 000003E8 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>10000 EXP After Battle</name>
++        <codes>52042418 00000000 1205B878 00002710 D2000000 00000000</codes>
++      </cheat>
++    </folder>
++    <folder>
++      <name>Experience Multiplier Codes</name>
++      <allowedon>1</allowedon>
++      <cheat>
++        <name>x2</name>
++        <codes>5206A658 030CB538 0206A658 034CB538 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>x4</name>
++        <codes>5206A658 030CB538 0206A658 038CB538 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>x8</name>
++        <codes>5206A658 030CB538 0206A658 03CCB538 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>x16</name>
++        <codes>5206A658 030CB538 0206A658 040CB538 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>x32</name>
++        <codes>5206A658 030CB538 0206A658 044CB538 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>x64</name>
++        <codes>5206A658 030CB538 0206A658 048CB538 D0000000 00000000</codes>
++      </cheat>
++    </folder>
++    <folder>
++      <name>Mission Munny Codes</name>
++      <allowedon>1</allowedon>
++      <cheat>
++        <name>255 Munny After Battle</name>
++        <codes>52042418 00000000 2205B874 000000FF D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>1000 Munny After Battle</name>
++        <codes>52042418 00000000 1205B874 00002710 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Max Munny After Battle</name>
++        <codes>52042418 00000000 0205B874 000F423F D2000000 00000000</codes>
++      </cheat>
++    </folder>
++    <folder>
++      <name>Money Multiplier Codes</name>
++      <allowedon>1</allowedon>
++      <cheat>
++        <name>x2</name>
++        <codes>5206A710 482F6981 0206A710 00406980 1206A714 00006148 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>x4</name>
++        <codes>5206A710 482F6981 0206A710 00806980 1206A714 00006148 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>x8</name>
++        <codes>5206A710 482F6981 0206A710 00C06980 1206A714 00006148 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>x16</name>
++        <codes>5206A710 482F6981 0206A710 01006980 1206A714 00006148 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>x32</name>
++        <codes>5206A710 482F6981 0206A710 01406980 1206A714 00006148 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>x64</name>
++        <codes>5206A710 482F6981 0206A710 01806980 1206A714 00006148 D0000000 00000000</codes>
++      </cheat>
++    </folder>
++    <folder>
++      <name>Jump Multiplier Codes</name>
++      <allowedon>1</allowedon>
++      <cheat>
++        <name>x2</name>
++        <codes>92097D3E 0000E585 12097D40 00000EC6 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>x4</name>
++        <codes>92097D3E 0000E585 12097D40 00000D63 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>x8</name>
++        <codes>92097D3E 0000E585 12097D40 00000DC6 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>x16</name>
++        <codes>92097D3E 0000E585 12097D40 00000C63 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>x32</name>
++        <codes>92097D3E 0000E585 12097D40 00000CC6 D0000000 00000000</codes>
++      </cheat>
++    </folder>
++    <folder>
++      <name>Mission Heart Point Codes</name>
++      <allowedon>1</allowedon>
++      <cheat>
++        <name>255 Heart Points After Battle</name>
++        <codes>52042418 00000000 2205B870 000000FF D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>10000 Heart Points After Battle</name>
++        <codes>52042418 00000000 1205B870 00002710 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Max Heart Points After Battle</name>
++        <codes>52042418 00000000 0205B870 000F423F D2000000 00000000</codes>
++      </cheat>
++    </folder>
++    <folder>
++      <name>Exp/Heart/Money Multiplier Codes</name>
++      <allowedon>1</allowedon>
++      <cheat>
++        <name>x2</name>
++        <codes>9206C30A 0000E791 1206C30C 00003086 0206C310 EA00000C D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>x4</name>
++        <codes>9206C30A 0000E791 1206C30C 00003106 0206C310 EA00000C D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>x8</name>
++        <codes>9206C30A 0000E791 1206C30C 00003186 0206C310 EA00000C D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>x16</name>
++        <codes>9206C30A 0000E791 1206C30C 00003206 0206C310 EA00000C D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>x32</name>
++        <codes>9206C30A 0000E791 1206C30C 00003286 0206C310 EA00000C D0000000 00000000</codes>
++      </cheat>
++    </folder>
++    <folder>
++      <name>Character 1 Mod Codes (Story Mode)</name>
++      <allowedon>1</allowedon>
++      <cheat>
++        <name>Roxas</name>
++        <codes>9204BD84 00000002 2204C65B 00000000 D0000000 00000000 9204BD84 00000080 2204C65B 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Axel</name>
++        <codes>9204BD84 00000002 2204C65B 00000001 D0000000 00000000 9204BD84 00000080 2204C65B 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Xigbar</name>
++        <codes>9204BD84 00000002 2204C65B 00000002 D0000000 00000000 9204BD84 00000080 2204C65B 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Saix</name>
++        <codes>9204BD84 00000002 2204C65B 00000003 D0000000 00000000 9204BD84 00000080 2204C65B 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Xaldin</name>
++        <codes>9204BD84 00000002 2204C65B 00000004 D0000000 00000000 9204BD84 00000080 2204C65B 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Sora</name>
++        <codes>9204BD84 00000002 2204C65B 00000005 D0000000 00000000 9204BD84 00000080 2204C65B 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Demyx</name>
++        <codes>9204BD84 00000002 2204C65B 00000006 D0000000 00000000 9204BD84 00000080 2204C65B 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Larxene</name>
++        <codes>9204BD84 00000002 2204C65B 00000007 D0000000 00000000 9204BD84 00000080 2204C65B 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Lexaeus</name>
++        <codes>9204BD84 00000002 2204C65B 00000008 D0000000 00000000 9204BD84 00000080 2204C65B 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Luxord</name>
++        <codes>9204BD84 00000002 2204C65B 00000009 D0000000 00000000 9204BD84 00000080 2204C65B 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Marluxia</name>
++        <codes>9204BD84 00000002 2204C65B 0000000A D0000000 00000000 9204BD84 00000080 2204C65B 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Riku</name>
++        <codes>9204BD84 00000002 2204C65B 0000000B D0000000 00000000 9204BD84 00000080 2204C65B 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Vexen</name>
++        <codes>9204BD84 00000002 2204C65B 0000000C D0000000 00000000 9204BD84 00000080 2204C65B 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Xemnas</name>
++        <codes>9204BD84 00000002 2204C65B 0000000D D0000000 00000000 9204BD84 00000080 2204C65B 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Xion</name>
++        <codes>9204BD84 00000002 2204C65B 0000000E D0000000 00000000 9204BD84 00000080 2204C65B 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Zexion</name>
++        <codes>9204BD84 00000002 2204C65B 0000000F D0000000 00000000 9204BD84 00000080 2204C65B 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Mickey</name>
++        <codes>9204BD84 00000002 2204C65B 00000010 D0000000 00000000 9204BD84 00000080 2204C65B 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Donald</name>
++        <codes>9204BD84 00000002 2204C65B 00000011 D0000000 00000000 9204BD84 00000080 2204C65B 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Goofy</name>
++        <codes>9204BD84 00000002 2204C65B 00000012 D0000000 00000000 9204BD84 00000080 2204C65B 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Dual Wield Roxas</name>
++        <codes>9204BD84 00000002 2204C65B 00000013 D0000000 00000000 9204BD84 00000080 2204C65B 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Single Wield Roxas</name>
++        <codes>9204BD84 00000002 2204C65B 00000014 D0000000 00000000 9204BD84 00000080 2204C65B 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Hooded Xion</name>
++        <codes>9204BD84 00000002 2204C65B 00000015 D0000000 00000000 9204BD84 00000080 2204C65B 00000000 D0000000 00000000</codes>
++      </cheat>
++    </folder>
++    <folder>
++      <name>Character 2 Mod Codes (Story Mode)</name>
++      <allowedon>1</allowedon>
++      <cheat>
++        <name>Roxas</name>
++        <codes>9204BD84 00000002 2204C75F 00000000 D0000000 00000000 9204BD84 00000080 2204C75F 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Axel</name>
++        <codes>9204BD84 00000002 2204C75F 00000001 D0000000 00000000 9204BD84 00000080 2204C75F 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Xigbar</name>
++        <codes>9204BD84 00000002 2204C75F 00000002 D0000000 00000000 9204BD84 00000080 2204C75F 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Saix</name>
++        <codes>9204BD84 00000002 2204C75F 00000003 D0000000 00000000 9204BD84 00000080 2204C75F 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Xaldin</name>
++        <codes>9204BD84 00000002 2204C75F 00000004 D0000000 00000000 9204BD84 00000080 2204C75F 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Sora</name>
++        <codes>9204BD84 00000002 2204C75F 00000005 D0000000 00000000 9204BD84 00000080 2204C75F 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Demyx</name>
++        <codes>9204BD84 00000002 2204C75F 00000006 D0000000 00000000 9204BD84 00000080 2204C75F 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Larxene</name>
++        <codes>9204BD84 00000002 2204C75F 00000007 D0000000 00000000 9204BD84 00000080 2204C75F 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Lexaeus</name>
++        <codes>9204BD84 00000002 2204C75F 00000008 D0000000 00000000 9204BD84 00000080 2204C75F 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Luxord</name>
++        <codes>9204BD84 00000002 2204C75F 00000009 D0000000 00000000 9204BD84 00000080 2204C75F 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Marluxia</name>
++        <codes>9204BD84 00000002 2204C75F 0000000A D0000000 00000000 9204BD84 00000080 2204C75F 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Riku</name>
++        <codes>9204BD84 00000002 2204C75F 0000000B D0000000 00000000 9204BD84 00000080 2204C75F 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Vexen</name>
++        <codes>9204BD84 00000002 2204C75F 0000000C D0000000 00000000 9204BD84 00000080 2204C75F 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Xemnas</name>
++        <codes>9204BD84 00000002 2204C75F 0000000D D0000000 00000000 9204BD84 00000080 2204C75F 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Xion</name>
++        <codes>9204BD84 00000002 2204C75F 0000000E D0000000 00000000 9204BD84 00000080 2204C75F 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Zexion</name>
++        <codes>9204BD84 00000002 2204C75F 0000000F D0000000 00000000 9204BD84 00000080 2204C75F 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Mickey</name>
++        <codes>9204BD84 00000002 2204C75F 00000010 D0000000 00000000 9204BD84 00000080 2204C75F 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Donald</name>
++        <codes>9204BD84 00000002 2204C75F 00000011 D0000000 00000000 9204BD84 00000080 2204C75F 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Goofy</name>
++        <codes>9204BD84 00000002 2204C75F 00000012 D0000000 00000000 9204BD84 00000080 2204C75F 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Dual Wield Roxas</name>
++        <codes>9204BD84 00000002 2204C75F 00000013 D0000000 00000000 9204BD84 00000080 2204C75F 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Single Wield Roxas</name>
++        <codes>9204BD84 00000002 2204C75F 00000014 D0000000 00000000 9204BD84 00000080 2204C75F 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Hooded Xion</name>
++        <codes>9204BD84 00000002 2204C75F 00000015 D0000000 00000000 9204BD84 00000080 2204C75F 00000000 D0000000 00000000</codes>
++      </cheat>
++    </folder>
++    <folder>
++      <name>Character 3 Mod Codes (Story Mode)</name>
++      <note>Can Only Be Used on Mission 56, Day 193</note>
++      <allowedon>1</allowedon>
++      <cheat>
++        <name>Roxas</name>
++        <codes>9204BD84 00000002 2204C863 00000000 D0000000 00000000 9204BD84 00000080 2204C863 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Axel</name>
++        <codes>9204BD84 00000002 2204C863 00000001 D0000000 00000000 9204BD84 00000080 2204C863 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Xigbar</name>
++        <codes>9204BD84 00000002 2204C863 00000002 D0000000 00000000 9204BD84 00000080 2204C863 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Saix</name>
++        <codes>9204BD84 00000002 2204C863 00000003 D0000000 00000000 9204BD84 00000080 2204C863 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Xaldin</name>
++        <codes>9204BD84 00000002 2204C863 00000004 D0000000 00000000 9204BD84 00000080 2204C863 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Sora</name>
++        <codes>9204BD84 00000002 2204C863 00000005 D0000000 00000000 9204BD84 00000080 2204C863 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Demyx</name>
++        <codes>9204BD84 00000002 2204C863 00000006 D0000000 00000000 9204BD84 00000080 2204C863 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Larxene</name>
++        <codes>9204BD84 00000002 2204C863 00000007 D0000000 00000000 9204BD84 00000080 2204C863 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Lexaeus</name>
++        <codes>9204BD84 00000002 2204C863 00000008 D0000000 00000000 9204BD84 00000080 2204C863 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Luxord</name>
++        <codes>9204BD84 00000002 2204C863 00000009 D0000000 00000000 9204BD84 00000080 2204C863 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Marluxia</name>
++        <codes>9204BD84 00000002 2204C863 0000000A D0000000 00000000 9204BD84 00000080 2204C863 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Riku</name>
++        <codes>9204BD84 00000002 2204C863 0000000B D0000000 00000000 9204BD84 00000080 2204C863 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Vexen</name>
++        <codes>9204BD84 00000002 2204C863 0000000C D0000000 00000000 9204BD84 00000080 2204C863 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Xemnas</name>
++        <codes>9204BD84 00000002 2204C863 0000000D D0000000 00000000 9204BD84 00000080 2204C863 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Xion</name>
++        <codes>9204BD84 00000002 2204C863 0000000E D0000000 00000000 9204BD84 00000080 2204C863 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Zexion</name>
++        <codes>9204BD84 00000002 2204C863 0000000F D0000000 00000000 9204BD84 00000080 2204C863 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Mickey</name>
++        <codes>9204BD84 00000002 2204C863 00000010 D0000000 00000000 9204BD84 00000080 2204C863 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Donald</name>
++        <codes>9204BD84 00000002 2204C863 00000011 D0000000 00000000 9204BD84 00000080 2204C863 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Goofy</name>
++        <codes>9204BD84 00000002 2204C863 00000012 D0000000 00000000 9204BD84 00000080 2204C863 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Dual Wield Roxas</name>
++        <codes>9204BD84 00000002 2204C863 00000013 D0000000 00000000 9204BD84 00000080 2204C863 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Single Wield Roxas</name>
++        <codes>9204BD84 00000002 2204C863 00000014 D0000000 00000000 9204BD84 00000080 2204C863 00000000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Hooded Xion</name>
++        <codes>9204BD84 00000002 2204C863 00000015 D0000000 00000000 9204BD84 00000080 2204C863 00000000 D0000000 00000000</codes>
++      </cheat>
++    </folder>
++    <folder>
++      <name>Keyblade/Weapon Mod Codes</name>
++      <note>Changes the Appearance and Aombo of your Keyblade / Weapon, you can still install Gears</note>
++      <allowedon>1</allowedon>
++      <cheat>
++        <name>No Gear (Kingdom Key)</name>
++        <codes>2204C65C 00000000 92035A78 00005581 12035A78 000046C0 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>No Gear (Stick)</name>
++        <codes>2204C65C 00000030 92035A78 00005581 12035A78 000046C0 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>No Gear (Grandstander Bat)</name>
++        <codes>2204C65C 0000002E 92035A78 00005581 12035A78 000046C0 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Skill Gear (Missing Ache)</name>
++        <codes>2204C65C 00000001 92035A78 00005581 12035A78 000046C0 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Skill Gear+ (Missing Ache+)</name>
++        <codes>2204C65C 00000002 92035A78 00005581 12035A78 000046C0 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Technical Gear (Ominous Blight)</name>
++        <codes>2204C65C 00000008 92035A78 00005581 12035A78 000046C0 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Technical Gear+ (Ominous Blight+)</name>
++        <codes>2204C65C 00000009 92035A78 00005581 12035A78 000046C0 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Duel Gear (Abaddon Plasma)</name>
++        <codes>2204C65C 00000014 92035A78 00005581 12035A78 000046C0 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Duel Gear+ (Abaddon Plasma+)</name>
++        <codes>2204C65C 00000013 92035A78 00005581 12035A78 000046C0 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Duel Gear++ (Abaddon Plasma++)</name>
++        <codes>2204C65C 0000001D 92035A78 00005581 12035A78 000046C0 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Loaded Gear (Pain of Solitude)</name>
++        <codes>2204C65C 00000003 92035A78 00005581 12035A78 000046C0 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Loaded Gear+ (Pain of Solitude+)</name>
++        <codes>2204C65C 00000004 92035A78 00005581 12035A78 000046C0 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Chrono Gear (Sign of Innocence)</name>
++        <codes>2204C65C 0000000A 92035A78 00005581 12035A78 000046C0 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Chrono Gear+ (Sign of Innocence+)</name>
++        <codes>2204C65C 0000000B 92035A78 00005581 12035A78 000046C0 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Phantom Gear (Crown of Guilt)</name>
++        <codes>2204C65C 00000015 92035A78 00005581 12035A78 000046C0 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Phantom Gear+ (Crown of Guilt+)</name>
++        <codes>2204C65C 00000016 92035A78 00005581 12035A78 000046C0 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Phantom Gear++ (Crown of Guilt++)</name>
++        <codes>2204C65C 0000001E 92035A78 00005581 12035A78 000046C0 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Lift Gear (Abyssal Tide)</name>
++        <codes>2204C65C 0000000E 92035A78 00005581 12035A78 000046C0 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Lift Gear+ (Abyssal Tide+)</name>
++        <codes>2204C65C 0000000F 92035A78 00005581 12035A78 000046C0 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Nimble Gear (Leviathan)</name>
++        <codes>2204C65C 0000001A 92035A78 00005581 12035A78 000046C0 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Nimble Gear+ (Leviathan+)</name>
++        <codes>2204C65C 00000019 92035A78 00005581 12035A78 000046C0 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Wild Gear (True Light's Flight)</name>
++        <codes>2204C65C 00000010 92035A78 00005581 12035A78 000046C0 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Wild Gear+ (True Light's Flight+)</name>
++        <codes>2204C65C 00000011 92035A78 00005581 12035A78 000046C0 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Ominous Gear (Rejection of Fate)</name>
++        <codes>2204C65C 0000001C 92035A78 00005581 12035A78 000046C0 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Ominous Gear+ (Rejection of Fate+)</name>
++        <codes>2204C65C 0000001B 92035A78 00005581 12035A78 000046C0 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Valor Gear (Midnight Roar)</name>
++        <codes>2204C65C 00000005 92035A78 00005581 12035A78 000046C0 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Valor Gear+ (Midnight Roar+)</name>
++        <codes>2204C65C 00000006 92035A78 00005581 12035A78 000046C0 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Fearless Gear (Glimpse of Darkness)</name>
++        <codes>2204C65C 0000000C 92035A78 00005581 12035A78 000046C0 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Fearless Gear+ (Glimpse of Darkness+)</name>
++        <codes>2204C65C 0000000D 92035A78 00005581 12035A78 000046C0 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Prestige Gear (Total Eclipse)</name>
++        <codes>2204C65C 00000018 92035A78 00005581 12035A78 000046C0 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Prestige Gear+ (Total Eclipse+)</name>
++        <codes>2204C65C 00000017 92035A78 00005581 12035A78 000046C0 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Crisis Gear (Silent Dirge)</name>
++        <codes>2204C65C 00000021 92035A78 00005581 12035A78 000046C0 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Crisis Gear+ (Silent Dirge+)</name>
++        <codes>2204C65C 00000022 92035A78 00005581 12035A78 000046C0 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Omega Gear (Lunar Eclipse)</name>
++        <codes>2204C65C 0000002B 92035A78 00005581 12035A78 000046C0 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Omega Gear (Lunar Eclipse+)</name>
++        <codes>2204C65C 0000002A 92035A78 00005581 12035A78 000046C0 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Hazard Gear (Darker Than Dark)</name>
++        <codes>2204C65C 0000001F 92035A78 00005581 12035A78 000046C0 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Hazard Gear+ (Darker Than Dark+)</name>
++        <codes>2204C65C 00000020 92035A78 00005581 12035A78 000046C0 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Rage Gear (Astral Blast)</name>
++        <codes>2204C65C 00000026 92035A78 00005581 12035A78 000046C0 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Rage Gear+ (Astral Blast+)</name>
++        <codes>2204C65C 00000025 92035A78 00005581 12035A78 000046C0 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Champion Gear (Maverick Flare)</name>
++        <codes>2204C65C 00000023 92035A78 00005581 12035A78 000046C0 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Champion Gear+ (Maverick Flare+)</name>
++        <codes>2204C65C 00000024 92035A78 00005581 12035A78 000046C0 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Ultimate Gear (Twilight Blaze)</name>
++        <codes>2204C65C 0000002D 92035A78 00005581 12035A78 000046C0 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Ultimate Gear+ (Twilight Blaze+)</name>
++        <codes>2204C65C 0000002C 92035A78 00005581 12035A78 000046C0 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Pandora's Gear (Omega Weapon)</name>
++        <codes>2204C65C 00000029 92035A78 00005581 12035A78 000046C0 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Pandora's Gear+ (Omega Weapon)</name>
++        <codes>2204C65C 00000028 92035A78 00005581 12035A78 000046C0 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Zero Gear (Kingdom Key+)</name>
++        <codes>2204C65C 00000027 92035A78 00005581 12035A78 000046C0 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Zero Gear (Oathkeeper)</name>
++        <codes>2204C65C 0000002F 92035A78 00005581 12035A78 000046C0 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Zero Gear (Two Become One)</name>
++        <codes>2204C65C 00000031 92035A78 00005581 12035A78 000046C0 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Casual Gear (Umbrella)</name>
++        <codes>2204C65C 00000007 92035A78 00005581 12035A78 000046C0 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Mystery Gear (Aubade)</name>
++        <codes>2204C65C 00000012 92035A78 00005581 12035A78 000046C0 D2000000 00000000</codes>
++      </cheat>
++    </folder>
++    <folder>
++      <name>Health/Damage Codes</name>
++      <allowedon>1</allowedon>
++      <cheat>
++        <name>Infinite Health</name>
++        <codes>520ACDB8 E1C601B2 020ACDB8 E1A00000 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Double Health</name>
++        <codes>520A0C6C E041100A 020A0C6C E04110AA D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Quadruple Health</name>
++        <codes>520A0C6C E041100A 020A0C6C E041112A D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>One Hit Kills You</name>
++        <codes>520ACDB4 E1A00005 020ACDB4 E3A00000 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Take Double Damage</name>
++        <codes>520A0C6C E041100A 020A0C6C E041108A D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Take Quadruple Damage</name>
++        <codes>520A0C6C E041100A 020A0C6C E041110A D2000000 00000000</codes>
++      </cheat>
++    </folder>
++    <folder>
++      <name>Backlight Codes</name>
++      <allowedon>1</allowedon>
++      <cheat>
++        <name>Nintendo DS Backlight Control</name>
++        <note>Press and hold L+R+Select then press Up to enable the backlight or Down to disable the backlight.</note>
++        <codes>94000130 FCFB0000 023FE074 012FFF11 E0000000 00000088 E28F0001 E12FFF10 A21CB5F0 88234C1C 80138811 D019428B 25803490 F0002000 1C06F818 420B2140 2180D003 D005420B 210CE00C D1094231 E0044331 4231210C 438ED004 20001C31 F805F000 BC08BCF0 30804718 88222100 D1FC422A 80224A09 88208060 D1FC4228 80220C12 88228061 D1FC422A 21FF8860 47704008 00000000 04000130 80028802 023FE074 E3520003 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Nintendo DS Lite Backlight Control</name>
++        <note>Press and hold L+R+Select then press Up to increase the backlight brightness or Down to decrease the backlight brightness.</note>
++        <codes>94000130 FCFB0000 023FE074 012FFF11 E0000000 000000A8 E28F0001 E12FFF10 A21AB5F0 88234C24 80138811 D02A428B 25803490 F0002000 1C06F82A F0002004 2703F826 21404007 D003420B 420B2180 E018D00C 4231210C 2F03D006 1C79D013 F0002004 E00EF816 E0094331 438E210C 2F001C31 1E79D004 F0002004 E002F80A F0002000 BCF0F806 4718BC08 30800000 88222100 D1FC422A 80224A08 88208060 D1FC4228 80220C12 88228061 D1FC422A 21FF8860 47704008 04000130 80028802 023FE074 E3520003 D2000000 00000000</codes>
++      </cheat>
++    </folder>
++  </game>
++  <game>
++    <name>Kingdom Hearts - Re-coded (Europe)</name>
++    <gameid>BK9P 5060245E</gameid>
++    <date>2025/08/12 19:36</date>
++    <folder>
++      <name>General Codes</name>
++      <cheat>
++        <name>Anti-Piracy Bypass Code</name>
++        <codes>520009F8 E12FFF1E 020009F8 EA0FF9C6 D2000000 00000000 023FF100 E59F0000 E23FF104 00000048 E12FFF1E 0030EB87 E59F0000 E12FFF1E 00323E6F E92D4007 E59F001C E59F101C E5912000 E1500002 059F0014 05810000 0280000C 0581003C E8BD8007 020D3908 020D312C 023FF100 D2000000 00000000</codes>
++      </cheat>
++    </folder>
++    <folder>
++      <name>Miscellaneous Codes</name>
++      <allowedon>0</allowedon>
++      <cheat>
++        <name>[SELECT]Max Munny</name>
++        <codes>94000130 FFFB0000 02199208 000F423F D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Clock Gauge Never Decrease</name>
++        <codes>520CC9C4 2800F87B 120CC9C8 0000E005 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Commands Never Cool Down</name>
++        <codes>52075A24 68680C04 02075A28 46C08028 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Inf. Second Jump</name>
++        <codes>520C85C4 1C07FAD9 E2000100 00000018 1C38B506 F0A72102 2800FA19 2003D001 203CBD06 BD065630 020C85C8 FD9AF737 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Press Start to Save Anywhere</name>
++        <codes>5206F414 1C309003 12070434 00002007 D2000000 00000000 520BAEB8 FAFEB3B0 12070434 00002001 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Always Overspec (L/R)</name>
++        <note>Hold L for [CR], hold R for Lv+10, hold neither or both for normal</note>
++        <codes>520C8698 42819804 120C869C 0000DC21 120C86EE 0000DC28 120C876C 0000DC09 120C8790 0000DC06 D2000000 00000000 94000130 FCFF0100 520C8698 42819804 120C869C 000046C0 120C86EE 000046C0 120C876C 0000E009 120C8790 0000E006 D2000000 00000000 94000130 FCFF0200 520C8698 42819804 120C869C 0000E021 120C86EE 0000E028 120C876C 000046C0 120C8790 0000E006 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Infinite Command Memory</name>
++        <codes>520C4D84 5EEB6C08 120C4D86 00002300 D2000000 00000000 520C5B20 48268BC1 120C5B20 00002100 D2000000 00000000 520C70E8 99048BC2 120C70E8 00002200 D2000000 00000000 520C9668 5E40211E 120C966A 00002000 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>100% Drop Rate</name>
++        <codes>520684BC 2000DA32 120684BC 000046C0 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Shops are Free</name>
++        <codes>520C09D4 61686880 120C09D4 00002000 D2000000 00000000 520C10DC 71609801 120C10DC 00002063 D2000000 00000000 520C1394 4A046883 120C1394 00002300 D2000000 00000000 520C13FC 428368A8 120C13FC 00002000 D2000000 00000000</codes>
++      </cheat>
++    </folder>
++    <folder>
++      <name>Coliseum Codes</name>
++      <allowedon>0</allowedon>
++      <cheat>
++        <name>HP Quick Refill</name>
++        <note>Cannot prevent 1 Hit Kill</note>
++        <codes>E20000E0 00000008 70058845 4770784C 520BCB84 30DC1C08 020BCB88 FAAAF743 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Commands Never Cool Down</name>
++        <note>only for offensive move</note>
++        <codes>52078114 85284008 12078118 000088A8 D2000000 00000000</codes>
++      </cheat>
++    </folder>
++    <folder>
++      <name>Stats Related Codes</name>
++      <allowedon>0</allowedon>
++      <cheat>
++        <name>HP Never Decrease</name>
++        <codes>920A7622 00002200 120A7624 000088A3 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>HP Never Decrease v2</name>
++        <codes>DA000000 02060B54 D7000000 02060B52 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>[Y]Refill HP</name>
++        <codes>94000136 FFFD0000 DA000000 02060B54 D7000000 02060B52 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>[SEL+L]Max Stats</name>
++        <codes>94000130 FDFB0000 12060B56 000003E7 02060B58 03E703E7 12060B5C 000003E7 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>[SEL+L]HP999/999</name>
++        <codes>94000130 FDFB0000 12060B52 000003E7 12060B54 000003E7 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>[SELECT]Max EXP</name>
++        <codes>94000130 FFFB0000 02199204 0098967F D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>[SELECT]HP999/999</name>
++        <codes>94000130 FFFB0000 12060B52 000003E7 12060B54 000003E7 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>[SELECT]All Blade MAX EXP</name>
++        <codes>94000130 FFFB0000 C0000000 00000009 12199718 0000270F DC000000 00000002 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>[SELECT+L]Keyblades, Attack, Magic Matrix EXP 9999</name>
++        <codes>94000130 FDFB0000 C0000000 0000000A 12199718 0000270F DC000000 00000002 D2000000 00000000 94000130 FDFB0000 C0000000 00000048 12199738 0000270F 1219985C 0000270F 12199980 0000270F 02199AA4 0000270F 02199BC8 0000270F DC000000 00000004 D2000000 00000000</codes>
++      </cheat>
++    </folder>
++    <folder>
++      <name>SP Related Codes</name>
++      <allowedon>0</allowedon>
++      <cheat>
++        <name>Total SP MAX (Before Entering) (SEL+L)</name>
++        <codes>94000130 FDFB0000 0221D180 0098967F 0221D184 0098967F D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Max SP (In Bug World)  (SEL+R)</name>
++        <codes>94000130 FEFB0000 0219EDC4 0098967F D2000000 00000000</codes>
++      </cheat>
++    </folder>
++    <folder>
++      <name>[SELECT]Unlock Codes</name>
++      <allowedon>0</allowedon>
++      <cheat>
++        <name>All Keyblades</name>
++        <codes>94000130 FFFB0000 C0000000 00000036 221992E0 00000001 DC000000 00000001 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Stat Matrix x50</name>
++        <codes>94000130 FFFB0000 C0000000 0000003A 221992A0 00000032 DC000000 00000001 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>All Accessories</name>
++        <codes>94000130 FFFB0000 C0000000 00000018 22199330 00000001 DC000000 00000001 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Complete Support, Item, Attack and Magic Matrix</name>
++        <codes>94000130 FFFB0000 D5000000 00000001 C0000000 00000048 D7000000 0219973A D4000000 00000100 DC000000 00000002 D2000000 00000000 94000130 FFFB0000 D5000000 00000001 C0000000 00000048 D7000000 0219985E D4000000 00000100 DC000000 00000002 D2000000 00000000 94000130 FFFB0000 D5000000 00000001 C0000000 00000048 D7000000 02199982 D4000000 00000100 DC000000 00000002 D2000000 00000000 94000130 FFFB0000 D5000000 00000001 C0000000 00000048 D7000000 02199AA6 D4000000 00000100 DC000000 00000002 D2000000 00000000 94000130 FFFB0000 D5000000 00000001 C0000000 00000048 D7000000 02199BCA D4000000 00000100 DC000000 00000002 D2000000 00000000 94000130 FFFB0000 C0000000 0000000E 22199320 00000001 DC000000 00000001 D2000000 00000000 94000130 FFFB0000 C0000000 00000006 22199290 00000063 DC000000 00000001 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Unlock Avatars</name>
++        <note>Doesn't require press Select</note>
++        <codes>520689AC E3580016 E20699AC 00000010 E7D06005 E1866004 E7C06005 E3A00001 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Unlock Theater Mode</name>
++        <note>Doesn't require press Select</note>
++        <codes>52061C88 E2840A06 02061C8C E5801688 02061C90 E3510000 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Debug Device: R x99</name>
++        <codes>94000130 FFFB0000 22199370 00000063 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Debug Device: Y x99</name>
++        <codes>94000130 FFFB0000 22199371 00000063 D2000000 00000000</codes>
++      </cheat>
++    </folder>
++    <folder>
++      <name>Clock Gauge Multiplier</name>
++      <allowedon>1</allowedon>
++      <cheat>
++        <name>2</name>
++        <codes>5206DF48 D0032D00 1206DF4C 00000068 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>4</name>
++        <codes>5206DF48 D0032D00 1206DF4C 000000A8 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>8</name>
++        <codes>5206DF48 D0032D00 1206DF4C 000000E8 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>16</name>
++        <codes>5206DF48 D0032D00 1206DF4C 00000128 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>32</name>
++        <codes>5206DF48 D0032D00 1206DF4C 00000168 D2000000 00000000</codes>
++      </cheat>
++    </folder>
++    <folder>
++      <name>Movement Speed Multiplier</name>
++      <allowedon>1</allowedon>
++      <cheat>
++        <name>1.5</name>
++        <codes>520CA214 46C0BDF0 020CA218 00000399 020CA21C 000004CC D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>2</name>
++        <codes>520CA214 46C0BDF0 020CA218 000004CC 020CA21C 00000666 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>2.5</name>
++        <codes>520CA214 46C0BDF0 020CA218 00000600 020CA21C 00000800 D2000000 00000000</codes>
++      </cheat>
++    </folder>
++    <folder>
++      <name>Experience Multiplier</name>
++      <allowedon>1</allowedon>
++      <cheat>
++        <name>2</name>
++        <codes>5206DFBC B082B5F8 1206DFC0 00000044 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>4</name>
++        <codes>5206DFBC B082B5F8 1206DFC0 00000084 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>8</name>
++        <codes>5206DFBC B082B5F8 1206DFC0 000000C4 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>16</name>
++        <codes>5206DFBC B082B5F8 1206DFC0 00000104 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>32</name>
++        <codes>5206DFBC B082B5F8 1206DFC0 00000144 D2000000 00000000</codes>
++      </cheat>
++    </folder>
++    <folder>
++      <name>SP Multiplier</name>
++      <allowedon>1</allowedon>
++      <cheat>
++        <name>2</name>
++        <codes>520A7AF0 2000DD7E 120A7AF4 00000061 120A7B78 00000061 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>4</name>
++        <codes>520A7AF0 2000DD7E 120A7AF4 000000A1 120A7B78 000000A1 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>8</name>
++        <codes>520A7AF0 2000DD7E 120A7AF4 000000E1 120A7B78 000000E1 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>16</name>
++        <codes>520A7AF0 2000DD7E 120A7AF4 00000121 120A7B78 00000121 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>32</name>
++        <codes>520A7AF0 2000DD7E 120A7AF4 00000161 120A7B78 00000161 D0000000 00000000</codes>
++      </cheat>
++    </folder>
++    <folder>
++      <name>Keyblade EXP Multiplier</name>
++      <allowedon>1</allowedon>
++      <cheat>
++        <name>Quick Level Up</name>
++        <codes>5206E0D0 1C50D32F 1206E0D0 000046C0 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>x2</name>
++        <codes>5206E074 1C07B5F8 1206E076 00000047 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>x4</name>
++        <codes>5206E074 1C07B5F8 1206E076 00000087 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>x8</name>
++        <codes>5206E074 1C07B5F8 1206E076 000000C7 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>x16</name>
++        <codes>5206E074 1C07B5F8 1206E076 00000107 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>x32</name>
++        <codes>5206E074 1C07B5F8 1206E076 00000147 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>x64</name>
++        <codes>5206E074 1C07B5F8 1206E076 00000187 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>x128</name>
++        <codes>5206E074 1C07B5F8 1206E076 000001C7 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>x256</name>
++        <codes>5206E074 1C07B5F8 1206E076 00000207 D2000000 00000000</codes>
++      </cheat>
++    </folder>
++    <folder>
++      <name>Backlight Codes</name>
++      <allowedon>1</allowedon>
++      <cheat>
++        <name>Nintendo DS Backlight Control</name>
++        <note>Press and hold L+R+Select then press Up to enable the backlight or Down to disable the backlight.</note>
++        <codes>94000130 FCFB0000 023FE074 012FFF11 E0000000 00000088 E28F0001 E12FFF10 A21CB5F0 88234C1C 80138811 D019428B 25803490 F0002000 1C06F818 420B2140 2180D003 D005420B 210CE00C D1094231 E0044331 4231210C 438ED004 20001C31 F805F000 BC08BCF0 30804718 88222100 D1FC422A 80224A09 88208060 D1FC4228 80220C12 88228061 D1FC422A 21FF8860 47704008 00000000 04000130 80028802 023FE074 E3520003 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Nintendo DS Lite Backlight Control</name>
++        <note>Press and hold L+R+Select then press Up to increase the backlight brightness or Down to decrease the backlight brightness.</note>
++        <codes>94000130 FCFB0000 023FE074 012FFF11 E0000000 000000A8 E28F0001 E12FFF10 A21AB5F0 88234C24 80138811 D02A428B 25803490 F0002000 1C06F82A F0002004 2703F826 21404007 D003420B 420B2180 E018D00C 4231210C 2F03D006 1C79D013 F0002004 E00EF816 E0094331 438E210C 2F001C31 1E79D004 F0002004 E002F80A F0002000 BCF0F806 4718BC08 30800000 88222100 D1FC422A 80224A08 88208060 D1FC4228 80220C12 88228061 D1FC422A 21FF8860 47704008 04000130 80028802 023FE074 E3520003 D2000000 00000000</codes>
++      </cheat>
++    </folder>
++  </game>
++  <game>
++    <name>Kingdom Hearts - Re-coded (Japan)</name>
++    <gameid>BK9J 34A21EC0</gameid>
++    <date>2025/08/12 19:36</date>
++    <folder>
++      <name>General Codes</name>
++      <cheat>
++        <name>Anti-Piracy Bypass Code</name>
++        <codes>520009F8 E12FFF1E 020009F8 EA0FF9C6 D2000000 00000000 023FF100 E59F0000 E23FF104 00000048 E12FFF1E 0030EB87 E59F0000 E12FFF1E 00323E6F E92D4007 E59F001C E59F101C E5912000 E1500002 059F0014 05810000 0280000C 0581003C E8BD8007 020D2EE8 020D270C 023FF100 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Game Enabler Code</name>
++        <codes>E20004A0 0000004C E59F002C E5901000 E59F2028 E1510002 059F1024 05801008 059F1020 058010A8 059F101C 05801148 059F1018 058011E8 E12FFF1E 020D1164 E15F4ED3 36AA8EFD 36AA4415 36AA19B8 36AA9B60 00000000 520009F8 E12FFF1E 020009F8 EAFFFEA8 D2000000 00000000</codes>
++      </cheat>
++    </folder>
++    <folder>
++      <name>Miscellaneous Codes</name>
++      <allowedon>0</allowedon>
++      <cheat>
++        <name>[SELECT]Max/Infinite Money</name>
++        <codes>94000130 FFFB0000 02197008 000F423F D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Clock Gauge Never Decrease</name>
++        <codes>520CB3E8 E00781A0 120CC3E8 0000E005 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Clock Gauge Quick Fillup</name>
++        <codes>52071D94 58514907 12072D96 00005222 D0000000 00000000 520CB3E8 E00781A0 120CC3E6 0000E000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Inf. Jump</name>
++        <codes>520C6FE8 C203CB03 E2000100 00000018 1C38B506 F0A62102 2800FF69 2003D001 203CBD06 BD065630 020C7FE8 F88AF738 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>[SELECT+R]Max SP</name>
++        <codes>94000130 FEFB0000 0219E7E4 0098967F D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>[SELECT+L]Max SP Total</name>
++        <codes>94000130 FDFB0000 0221CAB4 0098967F 0221CAB8 0098967F D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>[SELECT]x99 Bug:Remover (Red Blocks)</name>
++        <note>Use in Status Matrix</note>
++        <codes>94000130 FFFB0000 22197170 00000063 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>[SELECT]x99 Bug:Remover (Yellow Blocks)</name>
++        <note>Use in Status Matrix</note>
++        <codes>94000130 FFFB0000 22197171 00000063 D2000000 00000000</codes>
++      </cheat>
++    </folder>
++    <folder>
++      <name>Stats Related</name>
++      <allowedon>0</allowedon>
++      <cheat>
++        <name>HP Never Decrease</name>
++        <codes>DA000000 02060974 D7000000 02060972 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Max Stats</name>
++        <codes>12060976 000003E7 02060978 03E703E7 1206097C 000003E7</codes>
++      </cheat>
++      <cheat>
++        <name>[SELECT]Max EXP</name>
++        <codes>94000130 FFFB0000 02197004 0098967F D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>[SELECT]HP999/999</name>
++        <codes>94000130 FFFB0000 12060972 000003E7 12060974 000003E7 D2000000 00000000</codes>
++      </cheat>
++    </folder>
++    <folder>
++      <name>Clock Gauge Multiplier</name>
++      <allowedon>1</allowedon>
++      <cheat>
++        <name>2</name>
++        <codes>5206CD5C E886F78D 1206DD5C 00000068 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>4</name>
++        <codes>5206CD5C E886F78D 1206DD5C 000000A8 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>8</name>
++        <codes>5206CD5C E886F78D 1206DD5C 000000E8 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>16</name>
++        <codes>5206CD5C E886F78D 1206DD5C 00000128 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>32</name>
++        <codes>5206CD5C E886F78D 1206DD5C 00000168 D0000000 00000000</codes>
++      </cheat>
++    </folder>
++    <folder>
++      <name>Movement Speed Multiplier</name>
++      <allowedon>1</allowedon>
++      <cheat>
++        <name>1.5</name>
++        <codes>520C8C34 FFFFF4CD 020C9C38 00000399 020C9C3C 000004CC D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>2</name>
++        <codes>520C8C34 FFFFF4CD 020C9C38 000004CC 020C9C3C 00000666 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>2.5</name>
++        <codes>520C8C34 FFFFF4CD 020C9C38 00000600 020C9C3C 00000800 D0000000 00000000</codes>
++      </cheat>
++    </folder>
++    <folder>
++      <name>Backlight Codes</name>
++      <allowedon>1</allowedon>
++      <cheat>
++        <name>Nintendo DS Backlight Control</name>
++        <note>Press and hold L+R+Select then press Up to enable the backlight or Down to disable the backlight.</note>
++        <codes>94000130 FCFB0000 023FE074 012FFF11 E0000000 00000088 E28F0001 E12FFF10 A21CB5F0 88234C1C 80138811 D019428B 25803490 F0002000 1C06F818 420B2140 2180D003 D005420B 210CE00C D1094231 E0044331 4231210C 438ED004 20001C31 F805F000 BC08BCF0 30804718 88222100 D1FC422A 80224A09 88208060 D1FC4228 80220C12 88228061 D1FC422A 21FF8860 47704008 00000000 04000130 80028802 023FE074 E3520003 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Nintendo DS Lite Backlight Control</name>
++        <note>Press and hold L+R+Select then press Up to increase the backlight brightness or Down to decrease the backlight brightness.</note>
++        <codes>94000130 FCFB0000 023FE074 012FFF11 E0000000 000000A8 E28F0001 E12FFF10 A21AB5F0 88234C24 80138811 D02A428B 25803490 F0002000 1C06F82A F0002004 2703F826 21404007 D003420B 420B2180 E018D00C 4231210C 2F03D006 1C79D013 F0002004 E00EF816 E0094331 438E210C 2F001C31 1E79D004 F0002004 E002F80A F0002000 BCF0F806 4718BC08 30800000 88222100 D1FC422A 80224A08 88208060 D1FC4228 80220C12 88228061 D1FC422A 21FF8860 47704008 04000130 80028802 023FE074 E3520003 D2000000 00000000</codes>
++      </cheat>
++    </folder>
++  </game>
++  <game>
++    <name>Kingdom Hearts - Re-coded (USA)</name>
++    <gameid>BK9E B2D419DE</gameid>
++    <date>2025/08/12 19:36</date>
++    <folder>
++      <name>General Codes</name>
++      <cheat>
++        <name>Anti-Piracy Bypass Code</name>
++        <codes>520009F8 E12FFF1E 020009F8 EA0FF9C6 D2000000 00000000 023FF100 E59F0000 E23FF104 00000048 E12FFF1E 0030EB87 E59F0000 E12FFF1E 00323E6F E92D4007 E59F001C E59F101C E5912000 E1500002 059F0014 05810000 0280000C 0581003C E8BD8007 020D38E8 020D310C 023FF100 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Game Enabler Code</name>
++        <codes>E2000750 0000004C E59F002C E5901000 E59F2028 E1510002 059F1024 05801008 059F1020 058010A8 059F101C 05801148 059F1018 058011E8 E12FFF1E 020D1B64 E15F4ED3 36AA8EFD 36AA4415 36AA19B8 36AA9B60 00000000 520009F8 E12FFF1E 020009F8 EAFFFF54 D2000000 00000000</codes>
++      </cheat>
++    </folder>
++    <folder>
++      <name>Miscellaneous Codes</name>
++      <allowedon>0</allowedon>
++      <cheat>
++        <name>[SELECT]Max Munny</name>
++        <codes>94000130 FFFB0000 02198368 000F423F D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>x99 Bug:Remover (Red Blocks) [SELECT+UP]</name>
++        <note>YOU NEED TO HAVE AT LEAST ONE OF THESE REMOVERS TO USE THIS!Use in Status Matrix</note>
++        <codes>94000130 FFBB0000 221984D0 00000063 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>x99 Bug:Remover (Yellow Blocks) [SELECT+DOWN]</name>
++        <note>YOU NEED TO HAVE AT LEAST ONE OF THESE REMOVERS TO USE THIS!Use in Status Matrix</note>
++        <codes>94000130 FF7B0000 221984D1 00000063 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>[SELECT] All Blade MAX EXP</name>
++        <codes>94000130 FFFB0000 C0000000 00000009 12198878 0000270F DC000000 00000002 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>[SELECT] Attack • Magic chips</name>
++        <codes>94000130 FFFB0000 C0000000 00000048 2219889A 00000001 DC000000 00000004 D2000000 00000000 94000130 FFFB0000 D5000000 00000000 C0000000 00000048 D8000000 0219889B DC000000 00000003 D4000000 00000001 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Clock Gauge Never Decrease</name>
++        <codes>520CC9A4 2800F87B 120CC9A8 0000E005 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Commands Never Cool Down</name>
++        <codes>52075A24 68680C04 02075A28 46C08028 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Inf. Second Jump</name>
++        <codes>520C85A4 1C07FAE9 E2000100 00000018 1C38B506 F0A72102 2800FA09 2003D001 203CBD06 BD065630 020C85A8 FDAAF737 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Press Start to Save Anywhere</name>
++        <codes>5206F414 1C309003 12070434 00002007 D2000000 00000000 520BAE98 FAFEB3B8 12070434 00002001 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Max Score</name>
++        <note>Used in boss battle mode</note>
++        <codes>0219EDA0 0098967F</codes>
++      </cheat>
++      <cheat>
++        <name>Always Overspec (L/R)</name>
++        <note>Hold L for [CR], hold R for Lv+10, hold neither or both for normal</note>
++        <codes>520C8678 42819804 120C867C 0000DC21 120C86CE 0000DC28 120C874C 0000DC09 120C8770 0000DC06 D2000000 00000000 94000130 FCFF0100 520C8678 42819804 120C867C 000046C0 120C86CE 000046C0 120C874C 0000E009 120C8770 0000E006 D2000000 00000000 94000130 FCFF0200 520C8678 42819804 120C867C 0000E021 120C86CE 0000E028 120C874C 000046C0 120C8770 0000E006 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Infinite Command Memory</name>
++        <codes>520C4D64 5EEB6C08 120C4D66 00002300 D2000000 00000000 520C5B00 48268BC1 120C5B00 00002100 D2000000 00000000 520C70C8 99048BC2 120C70C8 00002200 D2000000 00000000 520C9648 5E40211E 120C964A 00002000 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>100% Drop Rate</name>
++        <codes>520684BC 2000DA32 120684BC 000046C0 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Shops are Free</name>
++        <codes>520C09B4 61686880 120C09B4 00002000 D2000000 00000000 520C10BC 71609801 120C10BC 00002063 D2000000 00000000 520C1374 4A046883 120C1374 00002300 D2000000 00000000 520C13DC 428368A8 120C13DC 00002000 D2000000 00000000</codes>
++      </cheat>
++    </folder>
++    <folder>
++      <name>Stats Related</name>
++      <allowedon>0</allowedon>
++      <cheat>
++        <name>HP Never Decrease</name>
++        <codes>920A7602 00002200 120A7604 000088A3 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>HP Never Decrease v2</name>
++        <codes>DA000000 02060B54 D7000000 02060B52 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Refill HP (Y)</name>
++        <codes>94000136 FFFD0000 DA000000 02060B54 D7000000 02060B52 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Max Stats (L+R)</name>
++        <codes>94000130 FCFF0000 12060B56 000003E7 02060B58 03E703E7 12060B5C 000003E7 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>[SELECT]HP999/999</name>
++        <codes>94000130 FFFB0000 12060B52 000003E7 12060B54 000003E7 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>[SELECT] Max EXP</name>
++        <codes>94000130 FFFB0000 02198364 0098967F D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>[SEL+L]Keyblades, Attack, Magic Matrix EXP 9999</name>
++        <codes>94000130 FDFB0000 C0000000 0000000A 12198878 0000270F DC000000 00000002 D2000000 00000000 94000130 FDFB0000 C0000000 00000048 12198898 0000270F DC000000 00000004 D2000000 00000000</codes>
++      </cheat>
++    </folder>
++    <folder>
++      <name>SP Codes</name>
++      <allowedon>0</allowedon>
++      <cheat>
++        <name>Total SP MAX (Before Entering) (SEL+L)</name>
++        <codes>94000130 FDFB0000 0221D160 0098967F 0221D164 0098967F D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Max SP (In Bug World)  (SEL+R)</name>
++        <codes>94000130 FEFB0000 0219EDA4 0098967F D2000000 00000000</codes>
++      </cheat>
++    </folder>
++    <folder>
++      <name>Unlock Codes</name>
++      <allowedon>0</allowedon>
++      <cheat>
++        <name>[SELECT]All KeyBlades</name>
++        <codes>94000130 FFFB0000 02198474 00010101 C0000000 0000000C 02198440 01010101 DC000000 00000004 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>[SELECT]All KeyBlade/Weapon Support</name>
++        <codes>94000130 FFFB0000 02198480 01010101 02198484 01010101 02198488 01010101 1219848C 00000101 2219848E 00000001 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>[SELECT]All Accesories</name>
++        <codes>94000130 FFFB0000 C0000000 00000018 22198490 00000001 DC000000 00000001 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>[SELECT]All Attack and Magic Chips</name>
++        <codes>94000130 FFFB0000 C0000000 00000048 2219889A 00000001 DC000000 00000004 D2000000 00000000 94000130 FFFB0000 D5000000 00000000 C0000000 00000048 D8000000 0219889B DC000000 00000003 D4000000 00000001 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>[SELECT]Stat Matrix x50</name>
++        <codes>94000130 FFFB0000 C0000000 0000003A 22198400 00000032 DC000000 00000001 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Unlock Avatars</name>
++        <note>Doesn't require press Select</note>
++        <codes>520689AC E3580016 E20699AC 00000010 E7D06005 E1866004 E7C06005 E3A00001 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Unlock Theater Mode</name>
++        <note>Doesn't require press Select</note>
++        <codes>52061C88 E2840A06 02061C8C E5801688 02061C90 E3510000 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>[SELECT] Complete Support, Item, Attack and Magic Matrix</name>
++        <codes>94000130 FFFB0000 C0000000 00000048 2219889A 00000001 DC000000 00000004 D2000000 00000000 94000130 FFFB0000 D5000000 00000000 C0000000 00000048 D8000000 0219889B DC000000 00000003 D4000000 00000001 D2000000 00000000 94000130 FFFB0000 C0000000 0000000E 22198480 00000001 DC000000 00000001 D2000000 00000000 94000130 FFFB0000 C0000000 00000006 221983F0 00000063 DC000000 00000001 D2000000 00000000</codes>
++      </cheat>
++    </folder>
++    <folder>
++      <name>Coliseum Codes</name>
++      <allowedon>0</allowedon>
++      <cheat>
++        <name>Commands Never Cool Down</name>
++        <codes>52078114 85284008 12078118 000088A8 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>HP Quick Refill</name>
++        <note>Cannot prevent 1 Hit Kill</note>
++        <codes>E20000E0 00000008 70058845 4770784C 520BCB64 30DC1C08 020BCB68 FABAF743 D2000000 00000000</codes>
++      </cheat>
++    </folder>
++    <folder>
++      <name>Clock Gauge Multiplier</name>
++      <allowedon>1</allowedon>
++      <cheat>
++        <name>2</name>
++        <codes>5206DF48 D0032D00 1206DF4C 00000068 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>4</name>
++        <codes>5206DF48 D0032D00 1206DF4C 000000A8 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>8</name>
++        <codes>5206DF48 D0032D00 1206DF4C 000000E8 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>16</name>
++        <codes>5206DF48 D0032D00 1206DF4C 00000128 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>32</name>
++        <codes>5206DF48 D0032D00 1206DF4C 00000168 D2000000 00000000</codes>
++      </cheat>
++    </folder>
++    <folder>
++      <name>Movement Speed Multiplier</name>
++      <allowedon>1</allowedon>
++      <cheat>
++        <name>1.5</name>
++        <codes>520CA1F4 46C0BDF0 020CA1F8 00000399 020CA1FC 000004CC D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>2</name>
++        <codes>520CA1F4 46C0BDF0 020CA1F8 000004CC 020CA1FC 00000666 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>2.5</name>
++        <codes>520CA1F4 46C0BDF0 020CA1F8 00000600 020CA1FC 00000800 D2000000 00000000</codes>
++      </cheat>
++    </folder>
++    <folder>
++      <name>Experience Multiplier</name>
++      <allowedon>1</allowedon>
++      <cheat>
++        <name>2</name>
++        <codes>5206DFBC B082B5F8 1206DFC0 00000044 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>4</name>
++        <codes>5206DFBC B082B5F8 1206DFC0 00000084 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>8</name>
++        <codes>5206DFBC B082B5F8 1206DFC0 000000C4 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>16</name>
++        <codes>5206DFBC B082B5F8 1206DFC0 00000104 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>32</name>
++        <codes>5206DFBC B082B5F8 1206DFC0 00000144 D2000000 00000000</codes>
++      </cheat>
++    </folder>
++    <folder>
++      <name>SP Multiplier</name>
++      <allowedon>1</allowedon>
++      <cheat>
++        <name>2</name>
++        <codes>520A7AD0 2000DD7E 120A7AD4 00000061 120A7B58 00000061 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>4</name>
++        <codes>520A7AD0 2000DD7E 120A7AD4 000000A1 120A7B58 000000A1 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>8</name>
++        <codes>520A7AD0 2000DD7E 120A7AD4 000000E1 120A7B58 000000E1 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>16</name>
++        <codes>520A7AD0 2000DD7E 120A7AD4 00000121 120A7B58 00000121 D0000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>32</name>
++        <codes>520A7AD0 2000DD7E 120A7AD4 00000161 120A7B58 00000161 D0000000 00000000</codes>
++      </cheat>
++    </folder>
++    <folder>
++      <name>Keyblade EXP Multiplier</name>
++      <allowedon>1</allowedon>
++      <cheat>
++        <name>Quick Level Up</name>
++        <codes>5206E0D0 1C50D32F 1206E0D0 000046C0 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>x2</name>
++        <codes>5206E074 1C07B5F8 1206E076 00000047 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>x4</name>
++        <codes>5206E074 1C07B5F8 1206E076 00000087 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>x8</name>
++        <codes>5206E074 1C07B5F8 1206E076 000000C7 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>x16</name>
++        <codes>5206E074 1C07B5F8 1206E076 00000107 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>x32</name>
++        <codes>5206E074 1C07B5F8 1206E076 00000147 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>x64</name>
++        <codes>5206E074 1C07B5F8 1206E076 00000187 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>x128</name>
++        <codes>5206E074 1C07B5F8 1206E076 000001C7 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>x256</name>
++        <codes>5206E074 1C07B5F8 1206E076 00000207 D2000000 00000000</codes>
++      </cheat>
++    </folder>
++    <folder>
++      <name>Backlight Codes</name>
++      <allowedon>1</allowedon>
++      <cheat>
++        <name>Nintendo DS Backlight Control</name>
++        <note>Press and hold L+R+Select then press Up to enable the backlight or Down to disable the backlight.</note>
++        <codes>94000130 FCFB0000 023FE074 012FFF11 E0000000 00000088 E28F0001 E12FFF10 A21CB5F0 88234C1C 80138811 D019428B 25803490 F0002000 1C06F818 420B2140 2180D003 D005420B 210CE00C D1094231 E0044331 4231210C 438ED004 20001C31 F805F000 BC08BCF0 30804718 88222100 D1FC422A 80224A09 88208060 D1FC4228 80220C12 88228061 D1FC422A 21FF8860 47704008 00000000 04000130 80028802 023FE074 E3520003 D2000000 00000000</codes>
++      </cheat>
++      <cheat>
++        <name>Nintendo DS Lite Backlight Control</name>
++        <note>Press and hold L+R+Select then press Up to increase the backlight brightness or Down to decrease the backlight brightness.</note>
++        <codes>94000130 FCFB0000 023FE074 012FFF11 E0000000 000000A8 E28F0001 E12FFF10 A21AB5F0 88234C24 80138811 D02A428B 25803490 F0002000 1C06F82A F0002004 2703F826 21404007 D003420B 420B2180 E018D00C 4231210C 2F03D006 1C79D013 F0002004 E00EF816 E0094331 438E210C 2F001C31 1E79D004 F0002004 E002F80A F0002000 BCF0F806 4718BC08 30800000 88222100 D1FC422A 80224A08 88208060 D1FC4228 80220C12 88228061 D1FC422A 21FF8860 47704008 04000130 80028802 023FE074 E3520003 D2000000 00000000</codes>
++      </cheat>
++    </folder>
++  </game>
++</codelist>
+\ No newline at end of file
+diff --git a/app/src/main/res/values/strings.xml b/app/src/main/res/values/strings.xml
+index 8ef72473..cd9cca84 100644
+--- a/app/src/main/res/values/strings.xml
++++ b/app/src/main/res/values/strings.xml
+@@ -248,6 +248,8 @@
+     <string name="kh_prefer_landscape_cinematics">Prefer landscape HD cinematics</string>
+     <string name="kh_prefer_landscape_cinematics_summary">Temporarily rotate HD cinematics to landscape, then restore the exact gameplay orientation when playback ends. The Rotate button can still change an individual cinematic.</string>
+     <string name="kh_rotate_cinematic">Rotate cinematic</string>
++    <string name="kh_cinematic_landscape_direction">Cinematic landscape direction</string>
++    <string name="input_kh_cinematic_rotate">Cinematic Rotate</string>
+     <string name="kh_bgm_category">Remastered music (KH Melon Mix)</string>
+     <string name="kh_bgm_pack_days">358/2 Days music pack</string>
+     <string name="kh_bgm_pack_recoded">Re:coded music pack</string>
+@@ -354,6 +356,10 @@
+     <string name="cheats_database">Cheats database (XML format)</string>
+     <string name="import_cheats">Import cheats</string>
+     <string name="import_cheats_summary">Import cheats from database files to make them available. XML and usrcheat.dat databases are supported. Any previously imported cheat will be deleted.</string>
++    <string name="kh_per_game_cheats">Kingdom Hearts cheats</string>
++    <string name="kh_per_game_cheats_value">Choose individual cheats</string>
++    <string name="kh_cheats_warning">Includes a curated subset of DeadSkullzJr’s NDS(i) Cheat Database (2025-08-12). Cheats are optional and disabled individually by default; the master switch under Settings → Cheats must also be enabled. Some codes can destabilise the game or make a RetroAchievements session ineligible; hardcore mode disables cheats. Use with caution.</string>
++    <string name="remix_updates_unavailable">Saltlord’s Remix updates are not available in-app yet. This control is disabled for the first public release to prevent installation of an incompatible upstream MelonMix build.</string>
+     <string name="rom_shortcut">ROM shortcut</string>
+ 
+     <string name="firmware_nickname">Nickname</string>
