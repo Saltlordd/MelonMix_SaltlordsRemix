@@ -11,8 +11,6 @@
 
 ---
 
-## About Saltlord's Remix
-
 # Melon Mix: Saltlord's Remix (Android)
 
 A personal passion project to create my ultimate way to play the Kingdom Hearts DS games on Android. 👑❤️
