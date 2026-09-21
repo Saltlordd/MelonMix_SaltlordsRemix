@@ -86,13 +86,18 @@ jobs:
         run: git apply --binary --exclude=README.md Saltlords-Remix-Major-v1.1.0.patch
 
       - name: Apply first-edition public-release corrections
-        run: git apply Saltlords-Remix-First-Edition-v2.patch
+        # These two files were already revised in the consolidated major patch;
+        # their corrected complete versions are in the release-candidate delta.
+        run: git apply --exclude=app/src/main/java/me/magnum/melonds/impl/InternalLayoutsRepository.kt --exclude=app/src/main/java/me/magnum/melonds/ui/emulator/RuntimeLayoutView.kt Saltlords-Remix-First-Edition-v2.patch
+
+      - name: Apply release-candidate polish
+        run: git apply --binary Saltlords-Remix-Release-Candidate-Polish-v1.patch
 
       - name: Apply source compatibility corrections
         run: |
           # Stay above every historical Remix playtest version so Android treats
           # this signed build as an update rather than a prohibited downgrade.
-          sed -i 's/versionCode = AppConfig.versionCode + 1006/versionCode = 11011/' \
+          sed -i 's/versionCode = AppConfig.versionCode + 1006/versionCode = 11012/' \
             app/build.gradle.kts
           # The API-36 Compose set exposes currentWindowAdaptiveInfo rather than
           # the API-37-only V2 spelling. Its windowSizeClass contract is the same
@@ -105,22 +110,15 @@ jobs:
           # newer internal implementation breaks Kotlin compilation.
           sed -i '/^import androidx\.compose\.foundation\.layout\.weight$/d' \
             app/src/main/java/me/magnum/melonds/ui/romlist/ui/RemixGuideUi.kt
-          # The repository's consolidated major patch predates the editable
-          # cinematic Rotate component, while the first-edition patch refers to
-          # it. Add the enum at build time without disturbing existing ordinals.
-          sed -i \
-            's/BUTTON_KH_HUD_TOGGLE(listOf(Input.KH_HUD_TOGGLE));/BUTTON_KH_HUD_TOGGLE(listOf(Input.KH_HUD_TOGGLE)),\n    BUTTON_KH_CINEMATIC_ROTATE(emptyList());/' \
-            app/src/main/java/me/magnum/melonds/domain/model/layout/LayoutComponent.kt
-          sed -i \
-            '/LayoutComponent.BUTTON_KH_HUD_TOGGLE ->/a\        LayoutComponent.BUTTON_KH_CINEMATIC_ROTATE -> R.string.input_kh_cinematic_rotate' \
-            app/src/main/java/me/magnum/melonds/utils/InputUtils.kt
+          # The consolidated major patch already includes the cinematic Rotate
+          # enum and label. Guard against duplicate entries from older workflows.
           grep -F 'BUTTON_KH_CINEMATIC_ROTATE(emptyList())' \
             app/src/main/java/me/magnum/melonds/domain/model/layout/LayoutComponent.kt
           grep -F 'LayoutComponent.BUTTON_KH_CINEMATIC_ROTATE -> R.string.input_kh_cinematic_rotate' \
             app/src/main/java/me/magnum/melonds/utils/InputUtils.kt
           ! grep -R -E 'currentWindowAdaptiveInfoV2|^import androidx\.compose\.foundation\.layout\.weight$' \
             app/src/main/java
-          grep -F 'versionCode = 11011' app/build.gradle.kts
+          grep -F 'versionCode = 11012' app/build.gradle.kts
 
       - name: Apply Saltlord's Remix native-core delta
         run: git -C melonDS-android-lib apply ../Saltlords-Remix-Core-v1.1.0.patch
