@@ -111,8 +111,13 @@ jobs:
           sed -i \
             's/BUTTON_KH_HUD_TOGGLE(listOf(Input.KH_HUD_TOGGLE));/BUTTON_KH_HUD_TOGGLE(listOf(Input.KH_HUD_TOGGLE)),\n    BUTTON_KH_CINEMATIC_ROTATE(emptyList());/' \
             app/src/main/java/me/magnum/melonds/domain/model/layout/LayoutComponent.kt
+          sed -i \
+            '/LayoutComponent.BUTTON_KH_HUD_TOGGLE ->/a\        LayoutComponent.BUTTON_KH_CINEMATIC_ROTATE -> R.string.input_kh_cinematic_rotate' \
+            app/src/main/java/me/magnum/melonds/utils/InputUtils.kt
           grep -F 'BUTTON_KH_CINEMATIC_ROTATE(emptyList())' \
             app/src/main/java/me/magnum/melonds/domain/model/layout/LayoutComponent.kt
+          grep -F 'LayoutComponent.BUTTON_KH_CINEMATIC_ROTATE -> R.string.input_kh_cinematic_rotate' \
+            app/src/main/java/me/magnum/melonds/utils/InputUtils.kt
           ! grep -R -E 'currentWindowAdaptiveInfoV2|^import androidx\.compose\.foundation\.layout\.weight$' \
             app/src/main/java
           grep -F 'versionCode = 11011' app/build.gradle.kts
