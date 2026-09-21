@@ -105,6 +105,14 @@ jobs:
           # newer internal implementation breaks Kotlin compilation.
           sed -i '/^import androidx\.compose\.foundation\.layout\.weight$/d' \
             app/src/main/java/me/magnum/melonds/ui/romlist/ui/RemixGuideUi.kt
+          # The repository's consolidated major patch predates the editable
+          # cinematic Rotate component, while the first-edition patch refers to
+          # it. Add the enum at build time without disturbing existing ordinals.
+          sed -i \
+            's/BUTTON_KH_HUD_TOGGLE(listOf(Input.KH_HUD_TOGGLE));/BUTTON_KH_HUD_TOGGLE(listOf(Input.KH_HUD_TOGGLE)),\n    BUTTON_KH_CINEMATIC_ROTATE(emptyList());/' \
+            app/src/main/java/me/magnum/melonds/domain/model/layout/LayoutComponent.kt
+          grep -F 'BUTTON_KH_CINEMATIC_ROTATE(emptyList())' \
+            app/src/main/java/me/magnum/melonds/domain/model/layout/LayoutComponent.kt
           ! grep -R -E 'currentWindowAdaptiveInfoV2|^import androidx\.compose\.foundation\.layout\.weight$' \
             app/src/main/java
           grep -F 'versionCode = 11011' app/build.gradle.kts
