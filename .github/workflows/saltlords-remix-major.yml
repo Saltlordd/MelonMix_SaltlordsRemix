@@ -140,6 +140,11 @@ jobs:
           test -f app/src/main/res/drawable-nodpi/kh_action_key.png
           test -f app/src/main/res/mipmap-xxxhdpi/ic_launcher_background.png
 
+      - name: Apply surgical touch camera and HD cinematic corrections
+        run: |
+          git apply --check Saltlords-Remix-Surgical-Camera-Cinematic-v1.patch
+          git apply Saltlords-Remix-Surgical-Camera-Cinematic-v1.patch
+
       - name: Apply source compatibility corrections
         run: |
           # Stay above every historical Remix playtest version so Android treats
