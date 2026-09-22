@@ -150,11 +150,16 @@ jobs:
           git apply --check Saltlords-Remix-Game-Shortcuts-v1.patch
           git apply --binary Saltlords-Remix-Game-Shortcuts-v1.patch
 
+      - name: Apply final shortcut and pause menu polish
+        run: |
+          git apply --check Saltlords-Remix-Visual-Polish-v1.patch
+          git apply --binary Saltlords-Remix-Visual-Polish-v1.patch
+
       - name: Apply source compatibility corrections
         run: |
           # Stay above every historical Remix playtest version so Android treats
           # this signed build as an update rather than a prohibited downgrade.
-          sed -i 's/versionCode = AppConfig.versionCode + 1006/versionCode = 11015/' \
+          sed -i 's/versionCode = AppConfig.versionCode + 1006/versionCode = 11016/' \
             app/build.gradle.kts
           # The API-36 Compose set exposes currentWindowAdaptiveInfo rather than
           # the API-37-only V2 spelling. Its windowSizeClass contract is the same
@@ -169,7 +174,7 @@ jobs:
             app/src/main/java/me/magnum/melonds/ui/romlist/ui/RemixGuideUi.kt
           ! grep -R -E 'currentWindowAdaptiveInfoV2|^import androidx\.compose\.foundation\.layout\.weight$' \
             app/src/main/java
-          grep -F 'versionCode = 11015' app/build.gradle.kts
+          grep -F 'versionCode = 11016' app/build.gradle.kts
 
       - name: Apply Saltlord's Remix native-core delta
         run: git -C melonDS-android-lib apply ../Saltlords-Remix-Core-v1.1.0.patch
